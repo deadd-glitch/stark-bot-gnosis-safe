@@ -59,7 +59,9 @@ impl AiClient {
                 )?;
                 Ok(AiClient::Claude(client))
             }
-            AiProvider::OpenAI => {
+            AiProvider::OpenAI | AiProvider::OpenAICompatible => {
+                // Both OpenAI and OpenAI-compatible use the same client
+                // The endpoint from settings is always used
                 let client = OpenAIClient::new(
                     &settings.api_key,
                     Some(&settings.endpoint),

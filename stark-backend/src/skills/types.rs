@@ -68,6 +68,10 @@ pub struct SkillMetadata {
     pub tags: Vec<String>,
     #[serde(default)]
     pub author: Option<String>,
+    #[serde(default)]
+    pub homepage: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<String>,
 }
 
 fn default_version() -> String {
@@ -85,6 +89,8 @@ impl Default for SkillMetadata {
             arguments: HashMap::new(),
             tags: vec![],
             author: None,
+            homepage: None,
+            metadata: None,
         }
     }
 }
@@ -172,6 +178,8 @@ pub struct DbSkill {
     pub body: String,                    // The prompt template
     pub version: String,
     pub author: Option<String>,
+    pub homepage: Option<String>,
+    pub metadata: Option<String>,
     pub enabled: bool,
     pub requires_tools: Vec<String>,
     pub requires_binaries: Vec<String>,
@@ -194,6 +202,8 @@ impl DbSkill {
                 arguments: self.arguments,
                 tags: self.tags,
                 author: self.author,
+                homepage: self.homepage,
+                metadata: self.metadata,
             },
             prompt_template: self.body,
             source: SkillSource::Managed, // All DB skills are "managed"

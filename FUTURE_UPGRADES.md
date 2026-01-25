@@ -202,14 +202,7 @@ Accept incoming webhooks to trigger actions.
 
 ## Phase 5: User Experience
 
-### Multi-User Support
-Move beyond single-user secret key authentication.
 
-- [ ] Create `users` table with hashed passwords
-- [ ] Implement user registration (invite-only or open)
-- [ ] Add role-based access control (admin, user, readonly)
-- [ ] Support API keys per user for programmatic access
-- [ ] Add user-specific settings and preferences
 
 ### Dashboard Improvements
 Enhance the web UI with more functionality.
@@ -374,3 +367,11 @@ actix-governor = "0.4"      # Rate limiting
 │  └──────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+
+
+
+#### Automated Droplet Spin Up
+
+
+Charge users $20/mo  and a node will be auto-hosted for them via digitalocean - they dont need to mess with DO themselves at all .  Just pay and they get a droplet for themselves ... secret is provided to them or whatever. 

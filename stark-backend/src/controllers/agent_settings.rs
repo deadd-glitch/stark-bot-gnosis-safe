@@ -101,20 +101,26 @@ pub async fn get_available_providers(
         serde_json::json!({
             "id": "claude",
             "name": "Claude (Anthropic)",
-            "default_endpoint": AiProvider::Claude.default_endpoint(),
-            "default_model": AiProvider::Claude.default_model(),
+            "placeholder_endpoint": AiProvider::Claude.placeholder_endpoint(),
+            "placeholder_model": AiProvider::Claude.placeholder_model(),
         }),
         serde_json::json!({
             "id": "openai",
             "name": "OpenAI",
-            "default_endpoint": AiProvider::OpenAI.default_endpoint(),
-            "default_model": AiProvider::OpenAI.default_model(),
+            "placeholder_endpoint": AiProvider::OpenAI.placeholder_endpoint(),
+            "placeholder_model": AiProvider::OpenAI.placeholder_model(),
+        }),
+        serde_json::json!({
+            "id": "openai_compatible",
+            "name": "OpenAI Compatible (DigitalOcean, Azure, etc.)",
+            "placeholder_endpoint": AiProvider::OpenAICompatible.placeholder_endpoint(),
+            "placeholder_model": AiProvider::OpenAICompatible.placeholder_model(),
         }),
         serde_json::json!({
             "id": "llama",
             "name": "Llama (Ollama)",
-            "default_endpoint": AiProvider::Llama.default_endpoint(),
-            "default_model": AiProvider::Llama.default_model(),
+            "placeholder_endpoint": AiProvider::Llama.placeholder_endpoint(),
+            "placeholder_model": AiProvider::Llama.placeholder_model(),
         }),
     ];
 
@@ -149,20 +155,42 @@ pub async fn update_agent_settings(
         }));
     }
 
-    // API key is required for Claude and OpenAI, optional for Llama
-    if request.api_key.is_empty() && provider != AiProvider::Llama {
+    // Get existing settings to preserve API key if not provided
+    let existing_api_key = state.db.get_agent_settings_by_provider(&request.provider)
+        .ok()
+        .flatten()
+        .map(|s| s.api_key)
+        .unwrap_or_default();
+
+    // Use provided API key, or fall back to existing one
+    let api_key = if request.api_key.is_empty() {
+        existing_api_key
+    } else {
+        request.api_key.clone()
+    };
+
+    // API key is required for Claude, OpenAI, and OpenAI-compatible; optional for Llama
+    if api_key.is_empty() && provider != AiProvider::Llama {
         return HttpResponse::BadRequest().json(serde_json::json!({
             "error": "API key is required for this provider"
         }));
     }
 
-    // Use provided model or default
-    let model = request.model.unwrap_or_else(|| provider.default_model().to_string());
+    // Model is optional - use provided or empty string (some endpoints auto-select)
+    let model = request.model.clone().unwrap_or_default();
 
     // Save settings
-    match state.db.save_agent_settings(&request.provider, &request.endpoint, &request.api_key, &model) {
+    log::info!(
+        "Saving agent settings: provider={}, endpoint={}, api_key_len={}, model={}",
+        request.provider,
+        request.endpoint,
+        api_key.len(),
+        model
+    );
+
+    match state.db.save_agent_settings(&request.provider, &request.endpoint, &api_key, &model) {
         Ok(settings) => {
-            log::info!("Updated agent settings to use {} provider", request.provider);
+            log::info!("Updated agent settings to use {} provider, api_key stored: {}", request.provider, !settings.api_key.is_empty());
             let response: AgentSettingsResponse = settings.into();
             HttpResponse::Ok().json(response)
         }

@@ -237,6 +237,19 @@ impl ToolContext {
         self.workspace_dir = Some(workspace_dir);
         self
     }
+
+    /// Add an API key to the context (for use by tools)
+    pub fn with_api_key(mut self, service: &str, key: String) -> Self {
+        self.extra.insert(format!("api_key_{}", service), serde_json::json!(key));
+        self
+    }
+
+    /// Get an API key from the context
+    pub fn get_api_key(&self, service: &str) -> Option<String> {
+        self.extra.get(&format!("api_key_{}", service))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
 }
 
 /// Tool configuration stored in database

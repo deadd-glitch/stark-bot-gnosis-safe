@@ -75,14 +75,25 @@ pub async fn load_skills_from_directory(
     {
         let path = entry.path();
 
-        // Check for SKILL.md files
+        // Check for .md files (SKILL.md or any *.md files that contain frontmatter)
         if path.is_file() {
             if let Some(name) = path.file_name() {
-                if name.to_string_lossy().to_uppercase() == "SKILL.MD" {
+                let name_str = name.to_string_lossy();
+                // Accept SKILL.md or any .md file (e.g., github.md, weather.md)
+                if name_str.to_uppercase() == "SKILL.MD" || name_str.ends_with(".md") {
                     match load_skill_from_file(&path, source.clone()).await {
-                        Ok(skill) => skills.push(skill),
+                        Ok(skill) => {
+                            log::info!("Loaded skill '{}' from {}", skill.metadata.name, path.display());
+                            skills.push(skill);
+                        }
                         Err(e) => {
-                            log::warn!("Failed to load skill from {}: {}", path.display(), e);
+                            // Only warn if it's a SKILL.md file (expected to be a skill)
+                            // For other .md files, they may just be README or other docs
+                            if name_str.to_uppercase() == "SKILL.MD" {
+                                log::warn!("Failed to load skill from {}: {}", path.display(), e);
+                            } else {
+                                log::debug!("Skipping {}: {}", path.display(), e);
+                            }
                         }
                     }
                 }
@@ -93,7 +104,10 @@ pub async fn load_skills_from_directory(
             let skill_file = path.join("SKILL.md");
             if skill_file.exists() {
                 match load_skill_from_file(&skill_file, source.clone()).await {
-                    Ok(skill) => skills.push(skill),
+                    Ok(skill) => {
+                        log::info!("Loaded skill '{}' from {}", skill.metadata.name, skill_file.display());
+                        skills.push(skill);
+                    }
                     Err(e) => {
                         log::warn!("Failed to load skill from {}: {}", skill_file.display(), e);
                     }
@@ -142,6 +156,14 @@ fn serde_yaml_parse(yaml: &str) -> Result<SkillMetadata, String> {
                     "description" => metadata.description = unquote(value),
                     "version" => metadata.version = unquote(value),
                     "author" => metadata.author = Some(unquote(value)),
+                    "homepage" => metadata.homepage = Some(unquote(value)),
+                    "metadata" => {
+                        // metadata can be a JSON object, preserve it as-is
+                        let value_str = unquote(value);
+                        if !value_str.is_empty() {
+                            metadata.metadata = Some(value_str);
+                        }
+                    }
                     "requires_tools" => {
                         if value.starts_with('[') {
                             metadata.requires_tools = parse_inline_list(value);

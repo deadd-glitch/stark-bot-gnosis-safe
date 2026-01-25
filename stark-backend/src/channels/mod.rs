@@ -7,6 +7,7 @@ pub use dispatcher::MessageDispatcher;
 pub use types::{ChannelHandle, NormalizedMessage};
 
 use crate::db::Database;
+use crate::execution::ExecutionTracker;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::Channel;
@@ -21,15 +22,18 @@ pub struct ChannelManager {
     broadcaster: Arc<EventBroadcaster>,
     running_channels: Arc<DashMap<i64, ChannelHandle>>,
     tool_registry: Option<Arc<ToolRegistry>>,
+    execution_tracker: Arc<ExecutionTracker>,
 }
 
 impl ChannelManager {
     pub fn new(db: Arc<Database>, broadcaster: Arc<EventBroadcaster>) -> Self {
+        let execution_tracker = Arc::new(ExecutionTracker::new(broadcaster.clone()));
         Self {
             db,
             broadcaster,
             running_channels: Arc::new(DashMap::new()),
             tool_registry: None,
+            execution_tracker,
         }
     }
 
@@ -38,11 +42,13 @@ impl ChannelManager {
         broadcaster: Arc<EventBroadcaster>,
         tool_registry: Arc<ToolRegistry>,
     ) -> Self {
+        let execution_tracker = Arc::new(ExecutionTracker::new(broadcaster.clone()));
         Self {
             db,
             broadcaster,
             running_channels: Arc::new(DashMap::new()),
             tool_registry: Some(tool_registry),
+            execution_tracker,
         }
     }
 
@@ -76,6 +82,7 @@ impl ChannelManager {
                 self.db.clone(),
                 self.broadcaster.clone(),
                 tool_registry.clone(),
+                self.execution_tracker.clone(),
             ))
         } else {
             Arc::new(MessageDispatcher::new_without_tools(

@@ -107,7 +107,7 @@ impl Tool for WebSearchTool {
         self.definition.clone()
     }
 
-    async fn execute(&self, params: Value, _context: &ToolContext) -> ToolResult {
+    async fn execute(&self, params: Value, context: &ToolContext) -> ToolResult {
         let params: WebSearchParams = match serde_json::from_value(params) {
             Ok(p) => p,
             Err(e) => return ToolResult::error(format!("Invalid parameters: {}", e)),
@@ -116,14 +116,26 @@ impl Tool for WebSearchTool {
         let num_results = params.num_results.unwrap_or(5).min(10);
 
         // Try different search API providers
-        // Check for Brave Search API key
+        // First check context (database-stored keys), then fall back to env vars
+
+        // Check for Brave Search API key (context first, then env)
+        if let Some(api_key) = context.get_api_key("brave_search") {
+            return self
+                .search_brave(&params.query, num_results, &api_key)
+                .await;
+        }
         if let Ok(api_key) = std::env::var("BRAVE_SEARCH_API_KEY") {
             return self
                 .search_brave(&params.query, num_results, &api_key)
                 .await;
         }
 
-        // Check for SerpAPI key
+        // Check for SerpAPI key (context first, then env)
+        if let Some(api_key) = context.get_api_key("serpapi") {
+            return self
+                .search_serpapi(&params.query, num_results, &api_key)
+                .await;
+        }
         if let Ok(api_key) = std::env::var("SERPAPI_API_KEY") {
             return self
                 .search_serpapi(&params.query, num_results, &api_key)
@@ -131,7 +143,7 @@ impl Tool for WebSearchTool {
         }
 
         ToolResult::error(
-            "No search API configured. Set BRAVE_SEARCH_API_KEY or SERPAPI_API_KEY environment variable.",
+            "No search API configured. Add a Brave Search or SerpAPI key in the API Keys page, or set BRAVE_SEARCH_API_KEY or SERPAPI_API_KEY environment variable.",
         )
     }
 }

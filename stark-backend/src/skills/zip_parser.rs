@@ -11,6 +11,8 @@ pub struct ParsedSkill {
     pub body: String,           // Prompt template
     pub version: String,
     pub author: Option<String>,
+    pub homepage: Option<String>,
+    pub metadata: Option<String>,
     pub requires_tools: Vec<String>,
     pub requires_binaries: Vec<String>,
     pub arguments: HashMap<String, SkillArgument>,
@@ -136,6 +138,8 @@ pub fn parse_skill_zip(data: &[u8]) -> Result<ParsedSkill, String> {
         body,
         version: metadata.version,
         author: metadata.author,
+        homepage: metadata.homepage,
+        metadata: metadata.metadata,
         requires_tools: metadata.requires_tools,
         requires_binaries: metadata.requires_binaries,
         arguments: metadata.arguments,
@@ -213,6 +217,13 @@ fn parse_yaml_frontmatter(yaml: &str) -> Result<SkillMetadata, String> {
                     "description" => metadata.description = unquote(value),
                     "version" => metadata.version = unquote(value),
                     "author" => metadata.author = Some(unquote(value)),
+                    "homepage" => metadata.homepage = Some(unquote(value)),
+                    "metadata" => {
+                        let value_str = unquote(value);
+                        if !value_str.is_empty() {
+                            metadata.metadata = Some(value_str);
+                        }
+                    }
                     "requires_tools" => {
                         if value.starts_with('[') {
                             metadata.requires_tools = parse_inline_list(value);

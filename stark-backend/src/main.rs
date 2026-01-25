@@ -1,5 +1,5 @@
 use actix_cors::Cors;
-use actix_files::Files;
+use actix_files::{Files, NamedFile};
 use actix_web::{middleware::Logger, web, App, HttpServer};
 use dotenv::dotenv;
 use std::sync::Arc;
@@ -9,6 +9,7 @@ mod channels;
 mod config;
 mod controllers;
 mod db;
+mod execution;
 mod gateway;
 mod middleware;
 mod models;
@@ -18,6 +19,7 @@ mod tools;
 use channels::MessageDispatcher;
 use config::Config;
 use db::Database;
+use execution::ExecutionTracker;
 use gateway::Gateway;
 use skills::SkillRegistry;
 use tools::ToolRegistry;
@@ -29,6 +31,7 @@ pub struct AppState {
     pub tool_registry: Arc<ToolRegistry>,
     pub skill_registry: Arc<SkillRegistry>,
     pub dispatcher: Arc<MessageDispatcher>,
+    pub execution_tracker: Arc<ExecutionTracker>,
 }
 
 #[actix_web::main]
@@ -64,12 +67,17 @@ async fn main() -> std::io::Result<()> {
     log::info!("Initializing Gateway");
     let gateway = Arc::new(Gateway::new_with_tools(db.clone(), tool_registry.clone()));
 
+    // Initialize Execution Tracker for progress display
+    log::info!("Initializing execution tracker");
+    let execution_tracker = Arc::new(ExecutionTracker::new(gateway.broadcaster().clone()));
+
     // Create the shared MessageDispatcher for all message processing
     log::info!("Initializing message dispatcher");
     let dispatcher = Arc::new(MessageDispatcher::new(
         db.clone(),
         gateway.broadcaster().clone(),
         tool_registry.clone(),
+        execution_tracker.clone(),
     ));
 
     // Start Gateway WebSocket server
@@ -88,6 +96,7 @@ async fn main() -> std::io::Result<()> {
     let tool_reg = tool_registry.clone();
     let skill_reg = skill_registry.clone();
     let disp = dispatcher.clone();
+    let exec_tracker = execution_tracker.clone();
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -104,6 +113,7 @@ async fn main() -> std::io::Result<()> {
                 tool_registry: Arc::clone(&tool_reg),
                 skill_registry: Arc::clone(&skill_reg),
                 dispatcher: Arc::clone(&disp),
+                execution_tracker: Arc::clone(&exec_tracker),
             }))
             .wrap(Logger::default())
             .wrap(cors)
@@ -119,7 +129,19 @@ async fn main() -> std::io::Result<()> {
             .configure(controllers::identity::config)
             .configure(controllers::tools::config)
             .configure(controllers::skills::config)
-            .service(Files::new("/", "./stark-frontend").index_file("index.html"))
+            // Serve static files, with SPA fallback to index.html for client-side routing
+            .service(
+                Files::new("/", "./stark-frontend/dist")
+                    .index_file("index.html")
+                    .default_handler(|req: actix_web::dev::ServiceRequest| {
+                        let (http_req, _payload) = req.into_parts();
+                        async {
+                            let response = NamedFile::open("./stark-frontend/dist/index.html")?
+                                .into_response(&http_req);
+                            Ok(actix_web::dev::ServiceResponse::new(http_req, response))
+                        }
+                    })
+            )
     })
     .bind(("0.0.0.0", port))?
     .run()

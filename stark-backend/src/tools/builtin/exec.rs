@@ -298,6 +298,13 @@ impl Tool for ExecTool {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        // Inject API keys as environment variables for CLI tools
+        // GitHub CLI (gh) uses GH_TOKEN or GITHUB_TOKEN for authentication
+        if let Some(github_token) = context.get_api_key("github") {
+            cmd.env("GH_TOKEN", &github_token);
+            cmd.env("GITHUB_TOKEN", &github_token);
+        }
+
         if let Some(ref args) = params.args {
             cmd.args(args);
         }

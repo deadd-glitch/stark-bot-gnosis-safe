@@ -247,6 +247,8 @@ impl Database {
                 body TEXT NOT NULL,
                 version TEXT NOT NULL DEFAULT '1.0.0',
                 author TEXT,
+                homepage TEXT,
+                metadata TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 requires_tools TEXT NOT NULL DEFAULT '[]',
                 requires_binaries TEXT NOT NULL DEFAULT '[]',
@@ -257,6 +259,21 @@ impl Database {
             )",
             [],
         )?;
+
+        // Migration: Add homepage and metadata columns if they don't exist
+        let has_homepage: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('skills') WHERE name='homepage'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_homepage {
+            conn.execute("ALTER TABLE skills ADD COLUMN homepage TEXT", [])?;
+            conn.execute("ALTER TABLE skills ADD COLUMN metadata TEXT", [])?;
+        }
 
         // Skill scripts table (Python/Bash scripts bundled with skills)
         conn.execute(
@@ -327,14 +344,15 @@ impl Database {
 
     pub fn validate_session(&self, token: &str) -> SqliteResult<Option<Session>> {
         let conn = self.conn.lock().unwrap();
-        let now = Utc::now().to_rfc3339();
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
 
         let mut stmt = conn.prepare(
             "SELECT id, token, created_at, expires_at FROM auth_sessions WHERE token = ?1 AND expires_at > ?2",
         )?;
 
         let session = stmt
-            .query_row([token, &now], |row| {
+            .query_row([token, &now_str], |row| {
                 let created_at_str: String = row.get(2)?;
                 let expires_at_str: String = row.get(3)?;
 
@@ -350,6 +368,15 @@ impl Database {
                 })
             })
             .ok();
+
+        // Extend session expiry on successful validation (keep active sessions alive)
+        if session.is_some() {
+            let new_expires = (now + Duration::hours(24)).to_rfc3339();
+            let _ = conn.execute(
+                "UPDATE auth_sessions SET expires_at = ?1 WHERE token = ?2",
+                [&new_expires, token],
+            );
+        }
 
         Ok(session)
     }
@@ -1827,13 +1854,15 @@ impl Database {
         let tags_json = serde_json::to_string(&skill.tags).unwrap_or_default();
 
         conn.execute(
-            "INSERT INTO skills (name, description, body, version, author, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+            "INSERT INTO skills (name, description, body, version, author, homepage, metadata, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
              ON CONFLICT(name) DO UPDATE SET
                 description = excluded.description,
                 body = excluded.body,
                 version = excluded.version,
                 author = excluded.author,
+                homepage = excluded.homepage,
+                metadata = excluded.metadata,
                 requires_tools = excluded.requires_tools,
                 requires_binaries = excluded.requires_binaries,
                 arguments = excluded.arguments,
@@ -1845,6 +1874,8 @@ impl Database {
                 skill.body,
                 skill.version,
                 skill.author,
+                skill.homepage,
+                skill.metadata,
                 skill.enabled as i32,
                 requires_tools_json,
                 requires_binaries_json,
@@ -1861,7 +1892,7 @@ impl Database {
     pub fn get_skill(&self, name: &str) -> SqliteResult<Option<crate::skills::DbSkill>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, body, version, author, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
+            "SELECT id, name, description, body, version, author, homepage, metadata, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
              FROM skills WHERE name = ?1"
         )?;
 
@@ -1876,7 +1907,7 @@ impl Database {
     pub fn get_skill_by_id(&self, id: i64) -> SqliteResult<Option<crate::skills::DbSkill>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, body, version, author, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
+            "SELECT id, name, description, body, version, author, homepage, metadata, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
              FROM skills WHERE id = ?1"
         )?;
 
@@ -1891,7 +1922,7 @@ impl Database {
     pub fn list_skills(&self) -> SqliteResult<Vec<crate::skills::DbSkill>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, body, version, author, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
+            "SELECT id, name, description, body, version, author, homepage, metadata, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
              FROM skills ORDER BY name"
         )?;
 
@@ -1907,7 +1938,7 @@ impl Database {
     pub fn list_enabled_skills(&self) -> SqliteResult<Vec<crate::skills::DbSkill>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, description, body, version, author, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
+            "SELECT id, name, description, body, version, author, homepage, metadata, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
              FROM skills WHERE enabled = 1 ORDER BY name"
         )?;
 
@@ -1941,10 +1972,10 @@ impl Database {
     }
 
     fn row_to_db_skill(row: &rusqlite::Row) -> rusqlite::Result<crate::skills::DbSkill> {
-        let requires_tools_str: String = row.get(7)?;
-        let requires_binaries_str: String = row.get(8)?;
-        let arguments_str: String = row.get(9)?;
-        let tags_str: String = row.get(10)?;
+        let requires_tools_str: String = row.get(9)?;
+        let requires_binaries_str: String = row.get(10)?;
+        let arguments_str: String = row.get(11)?;
+        let tags_str: String = row.get(12)?;
 
         Ok(crate::skills::DbSkill {
             id: row.get(0)?,
@@ -1952,14 +1983,17 @@ impl Database {
             description: row.get(2)?,
             body: row.get(3)?,
             version: row.get(4)?,
-            author: row.get(5)?,
-            enabled: row.get::<_, i32>(6)? != 0,
+            // Handle NULL values for optional fields
+            author: row.get::<_, Option<String>>(5)?,
+            homepage: row.get::<_, Option<String>>(6)?,
+            metadata: row.get::<_, Option<String>>(7)?,
+            enabled: row.get::<_, i32>(8)? != 0,
             requires_tools: serde_json::from_str(&requires_tools_str).unwrap_or_default(),
             requires_binaries: serde_json::from_str(&requires_binaries_str).unwrap_or_default(),
             arguments: serde_json::from_str(&arguments_str).unwrap_or_default(),
             tags: serde_json::from_str(&tags_str).unwrap_or_default(),
-            created_at: row.get(11)?,
-            updated_at: row.get(12)?,
+            created_at: row.get(13)?,
+            updated_at: row.get(14)?,
         })
     }
 

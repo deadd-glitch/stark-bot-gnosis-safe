@@ -1,3 +1,4 @@
+use crate::models::{ExecutionTask, TaskMetrics};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -184,6 +185,101 @@ impl GatewayEvent {
             serde_json::json!({
                 "channel_id": channel_id,
                 "skill_name": skill_name
+            }),
+        )
+    }
+
+    // =====================================================
+    // Execution Progress Events
+    // =====================================================
+
+    /// Execution started (plan mode or direct execution)
+    pub fn execution_started(channel_id: i64, execution_id: &str, mode: &str) -> Self {
+        Self::new(
+            "execution.started",
+            serde_json::json!({
+                "channel_id": channel_id,
+                "execution_id": execution_id,
+                "mode": mode  // "plan" or "execute"
+            }),
+        )
+    }
+
+    /// AI is thinking/reasoning
+    pub fn execution_thinking(channel_id: i64, execution_id: &str, text: &str) -> Self {
+        Self::new(
+            "execution.thinking",
+            serde_json::json!({
+                "channel_id": channel_id,
+                "execution_id": execution_id,
+                "text": text
+            }),
+        )
+    }
+
+    /// Task started (tool, sub-agent, etc.)
+    pub fn task_started(task: &ExecutionTask) -> Self {
+        Self::new(
+            "execution.task_started",
+            serde_json::json!({
+                "id": task.id,
+                "parent_id": task.parent_id,
+                "channel_id": task.channel_id,
+                "type": task.task_type.to_string(),
+                "description": task.description,
+                "active_form": task.active_form,
+                "status": task.status.to_string()
+            }),
+        )
+    }
+
+    /// Task metrics updated
+    pub fn task_updated(task_id: &str, channel_id: i64, metrics: &TaskMetrics) -> Self {
+        Self::new(
+            "execution.task_updated",
+            serde_json::json!({
+                "task_id": task_id,
+                "channel_id": channel_id,
+                "metrics": {
+                    "tool_uses": metrics.tool_uses,
+                    "tokens_used": metrics.tokens_used,
+                    "lines_read": metrics.lines_read,
+                    "duration_ms": metrics.duration_ms
+                }
+            }),
+        )
+    }
+
+    /// Task completed
+    pub fn task_completed(task_id: &str, channel_id: i64, status: &str, metrics: &TaskMetrics) -> Self {
+        Self::new(
+            "execution.task_completed",
+            serde_json::json!({
+                "task_id": task_id,
+                "channel_id": channel_id,
+                "status": status,
+                "metrics": {
+                    "tool_uses": metrics.tool_uses,
+                    "tokens_used": metrics.tokens_used,
+                    "lines_read": metrics.lines_read,
+                    "duration_ms": metrics.duration_ms
+                }
+            }),
+        )
+    }
+
+    /// Execution completed
+    pub fn execution_completed(channel_id: i64, execution_id: &str, total_metrics: &TaskMetrics) -> Self {
+        Self::new(
+            "execution.completed",
+            serde_json::json!({
+                "channel_id": channel_id,
+                "execution_id": execution_id,
+                "metrics": {
+                    "tool_uses": total_metrics.tool_uses,
+                    "tokens_used": total_metrics.tokens_used,
+                    "duration_ms": total_metrics.duration_ms
+                }
             }),
         )
     }

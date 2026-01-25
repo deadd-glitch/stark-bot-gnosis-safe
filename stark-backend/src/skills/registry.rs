@@ -112,6 +112,8 @@ impl SkillRegistry {
             body: parsed.body,
             version: parsed.version,
             author: parsed.author,
+            homepage: parsed.homepage,
+            metadata: parsed.metadata,
             enabled: true,
             requires_tools: parsed.requires_tools,
             requires_binaries: parsed.requires_binaries,
@@ -232,6 +234,8 @@ impl SkillRegistry {
             body: skill.prompt_template.clone(),
             version: skill.metadata.version.clone(),
             author: skill.metadata.author.clone(),
+            homepage: skill.metadata.homepage.clone(),
+            metadata: skill.metadata.metadata.clone(),
             enabled: skill.enabled,
             requires_tools: skill.metadata.requires_tools.clone(),
             requires_binaries: skill.metadata.requires_binaries.clone(),
@@ -288,9 +292,11 @@ impl SkillRegistry {
 pub fn create_default_registry(db: Arc<Database>) -> SkillRegistry {
     let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+    // The root /skills directory is the primary bundled path
+    // This loads skills directly from skills/*.md files
     SkillRegistry::with_paths(
         db,
-        Some(current_dir.join("skills/bundled")),
+        Some(current_dir.join("skills")),
         Some(current_dir.join("skills/managed")),
         Some(current_dir.join("workspace/.skills")),
     )

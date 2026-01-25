@@ -2,6 +2,7 @@ pub mod agent_settings;
 pub mod api_key;
 pub mod channel;
 pub mod chat_session;
+pub mod execution;
 pub mod identity;
 pub mod memory;
 pub mod session;
@@ -24,3 +25,4 @@ pub use memory::{
 };
 pub use session::Session;
 pub use session_message::{AddMessageRequest, MessageRole, SessionMessage, SessionTranscriptResponse};
+pub use execution::{ExecutionTask, TaskMetrics, TaskStatus, TaskType};

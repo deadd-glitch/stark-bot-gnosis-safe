@@ -170,10 +170,10 @@ Tools are registered in the `ToolRegistry` and made available based on the confi
 # Required
 DATABASE_URL=./starkbot.db
 
-# AI Provider (configure one)
+# AI Provider (configure in Agent Settings or via env)
 ANTHROPIC_API_KEY=your-claude-key
 
-# Search (configure one for web_search tool)
+# Search (configure in API Keys page or via env)
 BRAVE_SEARCH_API_KEY=your-brave-key
 # or
 SERPAPI_API_KEY=your-serpapi-key
@@ -182,6 +182,19 @@ SERPAPI_API_KEY=your-serpapi-key
 PORT=8080
 GATEWAY_PORT=8081
 ```
+
+### API Keys Management
+
+External service API keys can be configured in two ways:
+
+1. **API Keys Page** (Recommended) - Keys are stored securely in the database
+   - Navigate to `/api-keys.html` in the web UI
+   - Add Brave Search or SerpAPI keys for web search functionality
+   - Keys are loaded into the ToolContext for each tool execution
+
+2. **Environment Variables** - Fallback for development/deployment
+   - Set `BRAVE_SEARCH_API_KEY` or `SERPAPI_API_KEY` in your environment
+   - Database-stored keys take precedence over environment variables
 
 ## Code Structure
 

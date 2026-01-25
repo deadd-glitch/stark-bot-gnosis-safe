@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub enum AiProvider {
     Claude,
     OpenAI,
+    /// OpenAI-compatible API (DigitalOcean, Azure, local servers, etc.)
+    OpenAICompatible,
     Llama,
 }
 
@@ -15,6 +17,7 @@ impl AiProvider {
         match self {
             AiProvider::Claude => "claude",
             AiProvider::OpenAI => "openai",
+            AiProvider::OpenAICompatible => "openai_compatible",
             AiProvider::Llama => "llama",
         }
     }
@@ -23,25 +26,28 @@ impl AiProvider {
         match s.to_lowercase().as_str() {
             "claude" => Some(AiProvider::Claude),
             "openai" => Some(AiProvider::OpenAI),
+            "openai_compatible" | "openaicompatible" | "custom" => Some(AiProvider::OpenAICompatible),
             "llama" => Some(AiProvider::Llama),
             _ => None,
         }
     }
 
-    /// Get the default endpoint for each provider
-    pub fn default_endpoint(&self) -> &'static str {
+    /// Get placeholder endpoint text for UI hints only
+    pub fn placeholder_endpoint(&self) -> &'static str {
         match self {
             AiProvider::Claude => "https://api.anthropic.com/v1/messages",
             AiProvider::OpenAI => "https://api.openai.com/v1/chat/completions",
+            AiProvider::OpenAICompatible => "https://your-endpoint.com/v1/chat/completions",
             AiProvider::Llama => "http://localhost:11434/api/chat",
         }
     }
 
-    /// Get the default model for each provider
-    pub fn default_model(&self) -> &'static str {
+    /// Get placeholder model text for UI hints only
+    pub fn placeholder_model(&self) -> &'static str {
         match self {
             AiProvider::Claude => "claude-sonnet-4-20250514",
             AiProvider::OpenAI => "gpt-4o",
+            AiProvider::OpenAICompatible => "your-model-name",
             AiProvider::Llama => "llama3.2",
         }
     }
@@ -72,13 +78,13 @@ impl AgentSettings {
     }
 }
 
-/// Response type for agent settings API (hides sensitive key)
+/// Response type for agent settings API
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentSettingsResponse {
     pub id: i64,
     pub provider: String,
     pub endpoint: String,
-    pub has_api_key: bool,
+    pub api_key: String,
     pub model: String,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
@@ -91,7 +97,7 @@ impl From<AgentSettings> for AgentSettingsResponse {
             id: settings.id,
             provider: settings.provider,
             endpoint: settings.endpoint,
-            has_api_key: !settings.api_key.is_empty(),
+            api_key: settings.api_key,
             model: settings.model,
             enabled: settings.enabled,
             created_at: settings.created_at,

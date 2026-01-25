@@ -25,6 +25,10 @@ pub struct SkillInfo {
     pub requires_tools: Vec<String>,
     pub requires_binaries: Vec<String>,
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<String>,
 }
 
 impl From<&Skill> for SkillInfo {
@@ -38,6 +42,8 @@ impl From<&Skill> for SkillInfo {
             requires_tools: skill.metadata.requires_tools.clone(),
             requires_binaries: skill.metadata.requires_binaries.clone(),
             tags: skill.metadata.tags.clone(),
+            homepage: skill.metadata.homepage.clone(),
+            metadata: skill.metadata.metadata.clone(),
         }
     }
 }
@@ -67,6 +73,10 @@ pub struct SkillDetail {
     pub prompt_template: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scripts: Option<Vec<ScriptInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -122,6 +132,8 @@ impl From<&Skill> for SkillDetail {
             arguments,
             prompt_template: skill.prompt_template.clone(),
             scripts: None,
+            homepage: skill.metadata.homepage.clone(),
+            metadata: skill.metadata.metadata.clone(),
         }
     }
 }

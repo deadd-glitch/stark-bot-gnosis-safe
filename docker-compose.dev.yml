@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile.dev
     ports:
-      - "8080:8080"   # HTTP API + Frontend
+      - "8080:8080"   # HTTP API
       - "8081:8081"   # Gateway WebSocket
     volumes:
       # Mount source code for hot reloading
@@ -12,6 +12,8 @@ services:
       - ./stark-frontend:/app/stark-frontend
       - ./Cargo.toml:/app/Cargo.toml
       - ./Cargo.lock:/app/Cargo.lock
+      # Mount skills directory for bundled skills
+      - ./skills:/app/skills
       # Use named volume for target dir to avoid rebuilding deps every time
       - cargo-target:/app/target
       # Cache cargo registry for faster rebuilds
@@ -22,6 +24,23 @@ services:
       - RUST_LOG=debug
       - RUST_BACKTRACE=1
 
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "3001:3001"   # Vite dev server
+    volumes:
+      # Mount frontend source for hot reloading
+      - ./stark-frontend:/app
+      # Use named volume for node_modules to avoid overwriting
+      - frontend-node-modules:/app/node_modules
+    depends_on:
+      - backend
+    environment:
+      - NODE_ENV=development
+
 volumes:
   cargo-target:
   cargo-registry:
+  frontend-node-modules:

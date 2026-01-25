@@ -1,6 +1,7 @@
 use crate::ai::{AiClient, Message, MessageRole, TypedClaudeMessage, ToolCall, ToolResponse};
 use crate::channels::types::{DispatchResult, NormalizedMessage};
 use crate::db::Database;
+use crate::execution::ExecutionTracker;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::{MemoryType, SessionScope};
@@ -18,6 +19,7 @@ pub struct MessageDispatcher {
     db: Arc<Database>,
     broadcaster: Arc<EventBroadcaster>,
     tool_registry: Arc<ToolRegistry>,
+    execution_tracker: Arc<ExecutionTracker>,
     // Regex patterns for memory markers
     daily_log_pattern: Regex,
     remember_pattern: Regex,
@@ -29,11 +31,13 @@ impl MessageDispatcher {
         db: Arc<Database>,
         broadcaster: Arc<EventBroadcaster>,
         tool_registry: Arc<ToolRegistry>,
+        execution_tracker: Arc<ExecutionTracker>,
     ) -> Self {
         Self {
             db,
             broadcaster,
             tool_registry,
+            execution_tracker,
             daily_log_pattern: Regex::new(r"\[DAILY_LOG:\s*(.+?)\]").unwrap(),
             remember_pattern: Regex::new(r"\[REMEMBER:\s*(.+?)\]").unwrap(),
             remember_important_pattern: Regex::new(r"\[REMEMBER_IMPORTANT:\s*(.+?)\]").unwrap(),
@@ -42,10 +46,13 @@ impl MessageDispatcher {
 
     /// Create a dispatcher without tool support (for backwards compatibility)
     pub fn new_without_tools(db: Arc<Database>, broadcaster: Arc<EventBroadcaster>) -> Self {
+        // Create a minimal execution tracker for legacy use
+        let execution_tracker = Arc::new(ExecutionTracker::new(broadcaster.clone()));
         Self {
             db,
             broadcaster,
             tool_registry: Arc::new(ToolRegistry::new()),
+            execution_tracker,
             daily_log_pattern: Regex::new(r"\[DAILY_LOG:\s*(.+?)\]").unwrap(),
             remember_pattern: Regex::new(r"\[REMEMBER:\s*(.+?)\]").unwrap(),
             remember_important_pattern: Regex::new(r"\[REMEMBER_IMPORTANT:\s*(.+?)\]").unwrap(),
@@ -68,6 +75,9 @@ impl MessageDispatcher {
             return self.handle_reset_command(&message).await;
         }
 
+        // Start execution tracking
+        let execution_id = self.execution_tracker.start_execution(message.channel_id, "execute");
+
         // Get or create identity for the user
         let identity = match self.db.get_or_create_identity(
             &message.channel_type,
@@ -77,6 +87,7 @@ impl MessageDispatcher {
             Ok(id) => id,
             Err(e) => {
                 log::error!("Failed to get/create identity: {}", e);
+                self.execution_tracker.complete_execution(message.channel_id);
                 return DispatchResult::error(format!("Identity error: {}", e));
             }
         };
@@ -99,6 +110,7 @@ impl MessageDispatcher {
             Ok(s) => s,
             Err(e) => {
                 log::error!("Failed to get/create session: {}", e);
+                self.execution_tracker.complete_execution(message.channel_id);
                 return DispatchResult::error(format!("Session error: {}", e));
             }
         };
@@ -122,19 +134,22 @@ impl MessageDispatcher {
             Ok(None) => {
                 let error = "No AI provider configured. Please configure agent settings.".to_string();
                 log::error!("{}", error);
+                self.execution_tracker.complete_execution(message.channel_id);
                 return DispatchResult::error(error);
             }
             Err(e) => {
                 let error = format!("Database error: {}", e);
                 log::error!("{}", error);
+                self.execution_tracker.complete_execution(message.channel_id);
                 return DispatchResult::error(error);
             }
         };
 
         log::info!(
-            "Using {} provider with model {} for message dispatch",
+            "Using {} provider with model {} for message dispatch (api_key_len={})",
             settings.provider,
-            settings.model
+            settings.model,
+            settings.api_key.len()
         );
 
         // Create AI client from settings
@@ -143,9 +158,13 @@ impl MessageDispatcher {
             Err(e) => {
                 let error = format!("Failed to create AI client: {}", e);
                 log::error!("{}", error);
+                self.execution_tracker.complete_execution(message.channel_id);
                 return DispatchResult::error(error);
             }
         };
+
+        // Add thinking event before AI generation
+        self.execution_tracker.add_thinking(message.channel_id, "Processing request...");
 
         // Build context from memories and session history
         let system_prompt = self.build_system_prompt(&message, &identity.identity_id);
@@ -185,10 +204,24 @@ impl MessageDispatcher {
         // Check if the client supports tools and tools are configured
         let use_tools = client.supports_tools() && !self.tool_registry.is_empty();
 
-        // Build tool context
-        let tool_context = ToolContext::new()
+        // Build tool context with API keys from database
+        let workspace_dir = std::env::var("STARK_WORKSPACE_DIR")
+            .unwrap_or_else(|_| "./workspace".to_string());
+
+        let mut tool_context = ToolContext::new()
             .with_channel(message.channel_id, message.channel_type.clone())
-            .with_user(message.user_id.clone());
+            .with_user(message.user_id.clone())
+            .with_workspace(workspace_dir.clone());
+
+        // Ensure workspace directory exists
+        let _ = std::fs::create_dir_all(&workspace_dir);
+
+        // Load API keys from database for tools that need them
+        if let Ok(keys) = self.db.list_api_keys() {
+            for key in keys {
+                tool_context = tool_context.with_api_key(&key.service_name, key.api_key);
+            }
+        }
 
         // Generate response with optional tool execution loop
         let final_response = if use_tools {
@@ -247,11 +280,18 @@ impl MessageDispatcher {
                     settings.provider
                 );
 
+                // Complete execution tracking
+                self.execution_tracker.complete_execution(message.channel_id);
+
                 DispatchResult::success(clean_response)
             }
             Err(e) => {
                 let error = format!("AI generation error ({}): {}", settings.provider, e);
                 log::error!("{}", error);
+
+                // Complete execution tracking on error
+                self.execution_tracker.complete_execution(message.channel_id);
+
                 DispatchResult::error(error)
             }
         }
@@ -337,10 +377,20 @@ impl MessageDispatcher {
     ) -> Vec<ToolResponse> {
         let mut responses = Vec::new();
 
+        // Get the current execution ID for tracking
+        let execution_id = self.execution_tracker.get_execution_id(channel_id);
+
         for call in tool_calls {
             let start = std::time::Instant::now();
 
-            // Emit tool execution event
+            // Start tracking this tool execution
+            let task_id = if let Some(ref exec_id) = execution_id {
+                Some(self.execution_tracker.start_tool(channel_id, exec_id, &call.name))
+            } else {
+                None
+            };
+
+            // Emit tool execution event (legacy event for backwards compatibility)
             self.broadcaster.broadcast(GatewayEvent::tool_execution(
                 channel_id,
                 &call.name,
@@ -354,6 +404,23 @@ impl MessageDispatcher {
                 .await;
 
             let duration_ms = start.elapsed().as_millis() as i64;
+
+            // Complete the tool tracking
+            if let Some(ref tid) = task_id {
+                if result.success {
+                    self.execution_tracker.complete_task(tid);
+                } else {
+                    self.execution_tracker.complete_task_with_error(tid, &result.content);
+                }
+            }
+
+            // Emit tool result event (legacy event for backwards compatibility)
+            self.broadcaster.broadcast(GatewayEvent::tool_result(
+                channel_id,
+                &call.name,
+                result.success,
+                duration_ms,
+            ));
 
             // Log the execution
             if let Err(e) = self.db.log_tool_execution(&ToolExecution {
