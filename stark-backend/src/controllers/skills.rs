@@ -1,7 +1,9 @@
+use actix_multipart::Multipart;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use crate::skills::{Skill, SkillMetadata};
+use crate::skills::{DbSkillScript, Skill};
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -63,6 +65,8 @@ pub struct SkillDetail {
     pub tags: Vec<String>,
     pub arguments: Vec<ArgumentInfo>,
     pub prompt_template: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scripts: Option<Vec<ScriptInfo>>,
 }
 
 #[derive(Serialize)]
@@ -71,6 +75,21 @@ pub struct ArgumentInfo {
     pub description: String,
     pub required: bool,
     pub default: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ScriptInfo {
+    pub name: String,
+    pub language: String,
+}
+
+impl From<&DbSkillScript> for ScriptInfo {
+    fn from(script: &DbSkillScript) -> Self {
+        ScriptInfo {
+            name: script.name.clone(),
+            language: script.language.clone(),
+        }
+    }
 }
 
 impl From<&Skill> for SkillDetail {
@@ -102,6 +121,7 @@ impl From<&Skill> for SkillDetail {
             tags: skill.metadata.tags.clone(),
             arguments,
             prompt_template: skill.prompt_template.clone(),
+            scripts: None,
         }
     }
 }
@@ -118,15 +138,38 @@ pub struct OperationResponse {
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct UploadResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill: Option<SkillInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ScriptsListResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scripts: Option<Vec<ScriptInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/skills")
             .route("", web::get().to(list_skills))
+            .route("/upload", web::post().to(upload_skill))
+            .route("/reload", web::post().to(reload_skills))
             .route("/{name}", web::get().to(get_skill))
+            .route("/{name}", web::delete().to(delete_skill))
             .route("/{name}/enabled", web::put().to(set_enabled))
-            .route("/reload", web::post().to(reload_skills)),
+            .route("/{name}/scripts", web::get().to(get_skill_scripts)),
     );
 }
 
@@ -143,27 +186,30 @@ fn validate_session_from_request(
     let token = match token {
         Some(t) => t,
         None => {
-            return Err(HttpResponse::Unauthorized().json(SkillsListResponse {
+            return Err(HttpResponse::Unauthorized().json(OperationResponse {
                 success: false,
-                skills: None,
+                message: None,
                 error: Some("No authorization token provided".to_string()),
+                count: None,
             }));
         }
     };
 
     match state.db.validate_session(&token) {
         Ok(Some(_)) => Ok(()),
-        Ok(None) => Err(HttpResponse::Unauthorized().json(SkillsListResponse {
+        Ok(None) => Err(HttpResponse::Unauthorized().json(OperationResponse {
             success: false,
-            skills: None,
+            message: None,
             error: Some("Invalid or expired session".to_string()),
+            count: None,
         })),
         Err(e) => {
             log::error!("Failed to validate session: {}", e);
-            Err(HttpResponse::InternalServerError().json(SkillsListResponse {
+            Err(HttpResponse::InternalServerError().json(OperationResponse {
                 success: false,
-                skills: None,
+                message: None,
                 error: Some("Internal server error".to_string()),
+                count: None,
             }))
         }
     }
@@ -181,11 +227,7 @@ async fn list_skills(state: web::Data<AppState>, req: HttpRequest) -> impl Respo
         .map(|s| s.into())
         .collect();
 
-    HttpResponse::Ok().json(SkillsListResponse {
-        success: true,
-        skills: Some(skills),
-        error: None,
-    })
+    HttpResponse::Ok().json(skills)
 }
 
 async fn get_skill(
@@ -200,11 +242,21 @@ async fn get_skill(
     let name = path.into_inner();
 
     match state.skill_registry.get(&name) {
-        Some(skill) => HttpResponse::Ok().json(SkillDetailResponse {
-            success: true,
-            skill: Some((&skill).into()),
-            error: None,
-        }),
+        Some(skill) => {
+            let mut detail: SkillDetail = (&skill).into();
+
+            // Get associated scripts
+            let scripts = state.skill_registry.get_skill_scripts(&name);
+            if !scripts.is_empty() {
+                detail.scripts = Some(scripts.iter().map(|s| s.into()).collect());
+            }
+
+            HttpResponse::Ok().json(SkillDetailResponse {
+                success: true,
+                skill: Some(detail),
+                error: None,
+            })
+        }
         None => HttpResponse::NotFound().json(SkillDetailResponse {
             success: false,
             skill: None,
@@ -230,22 +282,19 @@ async fn set_enabled(
             success: false,
             message: None,
             error: Some(format!("Skill '{}' not found", name)),
+            count: None,
         });
     }
 
-    // Update in registry
+    // Update in registry (which updates the database)
     state.skill_registry.set_enabled(&name, body.enabled);
-
-    // Update in database
-    if let Err(e) = state.db.set_skill_enabled(&name, body.enabled) {
-        log::warn!("Failed to update skill enabled status in database: {}", e);
-    }
 
     let status = if body.enabled { "enabled" } else { "disabled" };
     HttpResponse::Ok().json(OperationResponse {
         success: true,
         message: Some(format!("Skill '{}' {}", name, status)),
         error: None,
+        count: None,
     })
 }
 
@@ -257,8 +306,9 @@ async fn reload_skills(state: web::Data<AppState>, req: HttpRequest) -> impl Res
     match state.skill_registry.reload().await {
         Ok(count) => HttpResponse::Ok().json(OperationResponse {
             success: true,
-            message: Some(format!("Loaded {} skills", count)),
+            message: Some(format!("Loaded {} skills from disk", count)),
             error: None,
+            count: Some(state.skill_registry.len()),
         }),
         Err(e) => {
             log::error!("Failed to reload skills: {}", e);
@@ -266,7 +316,149 @@ async fn reload_skills(state: web::Data<AppState>, req: HttpRequest) -> impl Res
                 success: false,
                 message: None,
                 error: Some(format!("Failed to reload skills: {}", e)),
+                count: None,
             })
         }
     }
+}
+
+async fn upload_skill(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    mut payload: Multipart,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
+    // Read the uploaded file
+    let mut file_data: Vec<u8> = Vec::new();
+
+    while let Some(item) = payload.next().await {
+        match item {
+            Ok(mut field) => {
+                while let Some(chunk) = field.next().await {
+                    match chunk {
+                        Ok(data) => file_data.extend_from_slice(&data),
+                        Err(e) => {
+                            return HttpResponse::BadRequest().json(UploadResponse {
+                                success: false,
+                                skill: None,
+                                error: Some(format!("Failed to read upload data: {}", e)),
+                            });
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                return HttpResponse::BadRequest().json(UploadResponse {
+                    success: false,
+                    skill: None,
+                    error: Some(format!("Failed to process upload: {}", e)),
+                });
+            }
+        }
+    }
+
+    if file_data.is_empty() {
+        return HttpResponse::BadRequest().json(UploadResponse {
+            success: false,
+            skill: None,
+            error: Some("No file uploaded".to_string()),
+        });
+    }
+
+    // Parse and create the skill
+    match state.skill_registry.create_skill_from_zip(&file_data) {
+        Ok(db_skill) => {
+            let skill = db_skill.into_skill();
+            HttpResponse::Ok().json(UploadResponse {
+                success: true,
+                skill: Some((&skill).into()),
+                error: None,
+            })
+        }
+        Err(e) => {
+            log::error!("Failed to create skill from ZIP: {}", e);
+            HttpResponse::BadRequest().json(UploadResponse {
+                success: false,
+                skill: None,
+                error: Some(e),
+            })
+        }
+    }
+}
+
+async fn delete_skill(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
+    let name = path.into_inner();
+
+    if !state.skill_registry.has_skill(&name) {
+        return HttpResponse::NotFound().json(OperationResponse {
+            success: false,
+            message: None,
+            error: Some(format!("Skill '{}' not found", name)),
+            count: None,
+        });
+    }
+
+    match state.skill_registry.delete_skill(&name) {
+        Ok(true) => HttpResponse::Ok().json(OperationResponse {
+            success: true,
+            message: Some(format!("Skill '{}' deleted", name)),
+            error: None,
+            count: None,
+        }),
+        Ok(false) => HttpResponse::NotFound().json(OperationResponse {
+            success: false,
+            message: None,
+            error: Some(format!("Skill '{}' not found", name)),
+            count: None,
+        }),
+        Err(e) => {
+            log::error!("Failed to delete skill: {}", e);
+            HttpResponse::InternalServerError().json(OperationResponse {
+                success: false,
+                message: None,
+                error: Some(format!("Failed to delete skill: {}", e)),
+                count: None,
+            })
+        }
+    }
+}
+
+async fn get_skill_scripts(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
+    let name = path.into_inner();
+
+    if !state.skill_registry.has_skill(&name) {
+        return HttpResponse::NotFound().json(ScriptsListResponse {
+            success: false,
+            scripts: None,
+            error: Some(format!("Skill '{}' not found", name)),
+        });
+    }
+
+    let scripts = state.skill_registry.get_skill_scripts(&name);
+    let script_infos: Vec<ScriptInfo> = scripts.iter().map(|s| s.into()).collect();
+
+    HttpResponse::Ok().json(ScriptsListResponse {
+        success: true,
+        scripts: Some(script_infos),
+        error: None,
+    })
 }

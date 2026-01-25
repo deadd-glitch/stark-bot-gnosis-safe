@@ -47,16 +47,16 @@ async fn main() -> std::io::Result<()> {
     let tool_registry = Arc::new(tools::create_default_registry());
     log::info!("Registered {} tools", tool_registry.len());
 
-    // Initialize Skill Registry
+    // Initialize Skill Registry (database-backed)
     log::info!("Initializing skill registry");
-    let skill_registry = Arc::new(skills::create_default_registry());
+    let skill_registry = Arc::new(skills::create_default_registry(db.clone()));
 
-    // Load skills from disk
+    // Load file-based skills into database (for backward compatibility)
     let skill_count = skill_registry.load_all().await.unwrap_or_else(|e| {
-        log::warn!("Failed to load skills: {}", e);
+        log::warn!("Failed to load skills from disk: {}", e);
         0
     });
-    log::info!("Loaded {} skills", skill_count);
+    log::info!("Loaded {} skills from disk, {} total in database", skill_count, skill_registry.len());
 
     // Initialize Gateway with tool registry
     log::info!("Initializing Gateway");

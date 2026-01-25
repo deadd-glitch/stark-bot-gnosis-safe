@@ -235,18 +235,40 @@ impl Database {
             [],
         )?;
 
-        // Installed skills table
+        // Drop old installed_skills table if it exists (migration)
+        conn.execute("DROP TABLE IF EXISTS installed_skills", [])?;
+
+        // Skills table (database-backed skill storage)
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS installed_skills (
+            "CREATE TABLE IF NOT EXISTS skills (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL,
-                version TEXT NOT NULL,
-                source TEXT NOT NULL,
-                path TEXT NOT NULL,
+                description TEXT NOT NULL,
+                body TEXT NOT NULL,
+                version TEXT NOT NULL DEFAULT '1.0.0',
+                author TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
-                metadata TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                requires_tools TEXT NOT NULL DEFAULT '[]',
+                requires_binaries TEXT NOT NULL DEFAULT '[]',
+                arguments TEXT NOT NULL DEFAULT '{}',
+                tags TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // Skill scripts table (Python/Bash scripts bundled with skills)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS skill_scripts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                code TEXT NOT NULL,
+                language TEXT NOT NULL DEFAULT 'python',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE,
+                UNIQUE(skill_id, name)
             )",
             [],
         )?;
@@ -1790,30 +1812,44 @@ impl Database {
         Ok(executions)
     }
 
-    // Installed Skills methods
+    // ============================================
+    // Skills CRUD methods (database-backed)
+    // ============================================
 
-    /// Save an installed skill to the database
-    pub fn save_installed_skill(&self, skill: &crate::skills::InstalledSkill) -> SqliteResult<i64> {
+    /// Create a new skill in the database
+    pub fn create_skill(&self, skill: &crate::skills::DbSkill) -> SqliteResult<i64> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
 
+        let requires_tools_json = serde_json::to_string(&skill.requires_tools).unwrap_or_default();
+        let requires_binaries_json = serde_json::to_string(&skill.requires_binaries).unwrap_or_default();
+        let arguments_json = serde_json::to_string(&skill.arguments).unwrap_or_default();
+        let tags_json = serde_json::to_string(&skill.tags).unwrap_or_default();
+
         conn.execute(
-            "INSERT INTO installed_skills (name, version, source, path, enabled, metadata, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+            "INSERT INTO skills (name, description, body, version, author, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
              ON CONFLICT(name) DO UPDATE SET
+                description = excluded.description,
+                body = excluded.body,
                 version = excluded.version,
-                source = excluded.source,
-                path = excluded.path,
-                enabled = excluded.enabled,
-                metadata = excluded.metadata,
+                author = excluded.author,
+                requires_tools = excluded.requires_tools,
+                requires_binaries = excluded.requires_binaries,
+                arguments = excluded.arguments,
+                tags = excluded.tags,
                 updated_at = excluded.updated_at",
             rusqlite::params![
                 skill.name,
+                skill.description,
+                skill.body,
                 skill.version,
-                skill.source,
-                skill.path,
+                skill.author,
                 skill.enabled as i32,
-                skill.metadata,
+                requires_tools_json,
+                requires_binaries_json,
+                arguments_json,
+                tags_json,
                 now
             ],
         )?;
@@ -1821,49 +1857,62 @@ impl Database {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Get an installed skill by name
-    pub fn get_installed_skill(&self, name: &str) -> SqliteResult<Option<crate::skills::InstalledSkill>> {
+    /// Get a skill by name
+    pub fn get_skill(&self, name: &str) -> SqliteResult<Option<crate::skills::DbSkill>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, version, source, path, enabled, metadata FROM installed_skills WHERE name = ?1"
+            "SELECT id, name, description, body, version, author, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
+             FROM skills WHERE name = ?1"
         )?;
 
         let skill = stmt
-            .query_row([name], |row| {
-                Ok(crate::skills::InstalledSkill {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    version: row.get(2)?,
-                    source: row.get(3)?,
-                    path: row.get(4)?,
-                    enabled: row.get::<_, i32>(5)? != 0,
-                    metadata: row.get(6)?,
-                })
-            })
+            .query_row([name], |row| Self::row_to_db_skill(row))
             .ok();
 
         Ok(skill)
     }
 
-    /// List all installed skills
-    pub fn list_installed_skills(&self) -> SqliteResult<Vec<crate::skills::InstalledSkill>> {
+    /// Get a skill by ID
+    pub fn get_skill_by_id(&self, id: i64) -> SqliteResult<Option<crate::skills::DbSkill>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, version, source, path, enabled, metadata FROM installed_skills ORDER BY name"
+            "SELECT id, name, description, body, version, author, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
+             FROM skills WHERE id = ?1"
         )?;
 
-        let skills: Vec<crate::skills::InstalledSkill> = stmt
-            .query_map([], |row| {
-                Ok(crate::skills::InstalledSkill {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    version: row.get(2)?,
-                    source: row.get(3)?,
-                    path: row.get(4)?,
-                    enabled: row.get::<_, i32>(5)? != 0,
-                    metadata: row.get(6)?,
-                })
-            })?
+        let skill = stmt
+            .query_row([id], |row| Self::row_to_db_skill(row))
+            .ok();
+
+        Ok(skill)
+    }
+
+    /// List all skills
+    pub fn list_skills(&self) -> SqliteResult<Vec<crate::skills::DbSkill>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, body, version, author, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
+             FROM skills ORDER BY name"
+        )?;
+
+        let skills: Vec<crate::skills::DbSkill> = stmt
+            .query_map([], |row| Self::row_to_db_skill(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(skills)
+    }
+
+    /// List enabled skills
+    pub fn list_enabled_skills(&self) -> SqliteResult<Vec<crate::skills::DbSkill>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, body, version, author, enabled, requires_tools, requires_binaries, arguments, tags, created_at, updated_at
+             FROM skills WHERE enabled = 1 ORDER BY name"
+        )?;
+
+        let skills: Vec<crate::skills::DbSkill> = stmt
+            .query_map([], |row| Self::row_to_db_skill(row))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -1875,19 +1924,131 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
         let rows_affected = conn.execute(
-            "UPDATE installed_skills SET enabled = ?1, updated_at = ?2 WHERE name = ?3",
+            "UPDATE skills SET enabled = ?1, updated_at = ?2 WHERE name = ?3",
             rusqlite::params![enabled as i32, now, name],
         )?;
         Ok(rows_affected > 0)
     }
 
-    /// Delete an installed skill
-    pub fn delete_installed_skill(&self, name: &str) -> SqliteResult<bool> {
+    /// Delete a skill (cascade deletes scripts)
+    pub fn delete_skill(&self, name: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap();
         let rows_affected = conn.execute(
-            "DELETE FROM installed_skills WHERE name = ?1",
+            "DELETE FROM skills WHERE name = ?1",
             [name],
         )?;
         Ok(rows_affected > 0)
+    }
+
+    fn row_to_db_skill(row: &rusqlite::Row) -> rusqlite::Result<crate::skills::DbSkill> {
+        let requires_tools_str: String = row.get(7)?;
+        let requires_binaries_str: String = row.get(8)?;
+        let arguments_str: String = row.get(9)?;
+        let tags_str: String = row.get(10)?;
+
+        Ok(crate::skills::DbSkill {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+            body: row.get(3)?,
+            version: row.get(4)?,
+            author: row.get(5)?,
+            enabled: row.get::<_, i32>(6)? != 0,
+            requires_tools: serde_json::from_str(&requires_tools_str).unwrap_or_default(),
+            requires_binaries: serde_json::from_str(&requires_binaries_str).unwrap_or_default(),
+            arguments: serde_json::from_str(&arguments_str).unwrap_or_default(),
+            tags: serde_json::from_str(&tags_str).unwrap_or_default(),
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
+        })
+    }
+
+    // ============================================
+    // Skill Scripts CRUD methods
+    // ============================================
+
+    /// Create a skill script
+    pub fn create_skill_script(&self, script: &crate::skills::DbSkillScript) -> SqliteResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT INTO skill_scripts (skill_id, name, code, language, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(skill_id, name) DO UPDATE SET
+                code = excluded.code,
+                language = excluded.language",
+            rusqlite::params![
+                script.skill_id,
+                script.name,
+                script.code,
+                script.language,
+                now
+            ],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get all scripts for a skill
+    pub fn get_skill_scripts(&self, skill_id: i64) -> SqliteResult<Vec<crate::skills::DbSkillScript>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, skill_id, name, code, language, created_at
+             FROM skill_scripts WHERE skill_id = ?1 ORDER BY name"
+        )?;
+
+        let scripts: Vec<crate::skills::DbSkillScript> = stmt
+            .query_map([skill_id], |row| {
+                Ok(crate::skills::DbSkillScript {
+                    id: row.get(0)?,
+                    skill_id: row.get(1)?,
+                    name: row.get(2)?,
+                    code: row.get(3)?,
+                    language: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(scripts)
+    }
+
+    /// Get scripts for a skill by skill name
+    pub fn get_skill_scripts_by_name(&self, skill_name: &str) -> SqliteResult<Vec<crate::skills::DbSkillScript>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT ss.id, ss.skill_id, ss.name, ss.code, ss.language, ss.created_at
+             FROM skill_scripts ss
+             JOIN skills s ON s.id = ss.skill_id
+             WHERE s.name = ?1 ORDER BY ss.name"
+        )?;
+
+        let scripts: Vec<crate::skills::DbSkillScript> = stmt
+            .query_map([skill_name], |row| {
+                Ok(crate::skills::DbSkillScript {
+                    id: row.get(0)?,
+                    skill_id: row.get(1)?,
+                    name: row.get(2)?,
+                    code: row.get(3)?,
+                    language: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(scripts)
+    }
+
+    /// Delete all scripts for a skill
+    pub fn delete_skill_scripts(&self, skill_id: i64) -> SqliteResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        let rows_affected = conn.execute(
+            "DELETE FROM skill_scripts WHERE skill_id = ?1",
+            [skill_id],
+        )?;
+        Ok(rows_affected as i64)
     }
 }

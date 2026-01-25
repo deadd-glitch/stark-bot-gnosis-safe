@@ -163,7 +163,58 @@ impl Skill {
     }
 }
 
-/// Database record for installed skills
+/// Database record for skills (new database-backed schema)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbSkill {
+    pub id: Option<i64>,
+    pub name: String,
+    pub description: String,
+    pub body: String,                    // The prompt template
+    pub version: String,
+    pub author: Option<String>,
+    pub enabled: bool,
+    pub requires_tools: Vec<String>,
+    pub requires_binaries: Vec<String>,
+    pub arguments: HashMap<String, SkillArgument>,
+    pub tags: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl DbSkill {
+    /// Convert to Skill for API compatibility
+    pub fn into_skill(self) -> Skill {
+        Skill {
+            metadata: SkillMetadata {
+                name: self.name,
+                description: self.description,
+                version: self.version,
+                requires_tools: self.requires_tools,
+                requires_binaries: self.requires_binaries,
+                arguments: self.arguments,
+                tags: self.tags,
+                author: self.author,
+            },
+            prompt_template: self.body,
+            source: SkillSource::Managed, // All DB skills are "managed"
+            path: String::new(),          // No file path for DB skills
+            enabled: self.enabled,
+        }
+    }
+}
+
+/// Database record for skill scripts
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbSkillScript {
+    pub id: Option<i64>,
+    pub skill_id: i64,
+    pub name: String,
+    pub code: String,
+    pub language: String,
+    pub created_at: String,
+}
+
+/// Legacy database record for installed skills (deprecated)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledSkill {
     pub id: Option<i64>,

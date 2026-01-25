@@ -7,6 +7,7 @@ edition = "2024"
 actix-web = "4"
 actix-files = "0.6"
 actix-cors = "0.7"
+actix-multipart = "0.6"
 tokio = { version = "1", features = ["full"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -37,6 +38,9 @@ regex = "1"
 
 # Tools system
 which = "5"
+
+# Skills ZIP upload
+zip = "0.6"
 
 [dev-dependencies]
 tempfile = "3"

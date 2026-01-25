@@ -1,4 +1,4 @@
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Deserialize;
 
 use crate::models::{
@@ -6,11 +6,49 @@ use crate::models::{
 };
 use crate::AppState;
 
+/// Validate session token from request
+fn validate_session_from_request(
+    state: &web::Data<AppState>,
+    req: &HttpRequest,
+) -> Result<(), HttpResponse> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim_start_matches("Bearer ").to_string());
+
+    let token = match token {
+        Some(t) => t,
+        None => {
+            return Err(HttpResponse::Unauthorized().json(serde_json::json!({
+                "error": "No authorization token provided"
+            })));
+        }
+    };
+
+    match state.db.validate_session(&token) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Invalid or expired session"
+        }))),
+        Err(e) => {
+            log::error!("Session validation error: {}", e);
+            Err(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Internal server error"
+            })))
+        }
+    }
+}
+
 /// Get or create an identity for a platform user
 async fn get_or_create_identity(
     data: web::Data<AppState>,
+    req: HttpRequest,
     body: web::Json<GetOrCreateIdentityRequest>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     match data.db.get_or_create_identity(
         &body.channel_type,
         &body.platform_user_id,
@@ -47,8 +85,12 @@ struct GetIdentityQuery {
 
 async fn get_identity(
     data: web::Data<AppState>,
+    req: HttpRequest,
     query: web::Query<GetIdentityQuery>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     match data
         .db
         .get_identity_by_platform(&query.channel_type, &query.platform_user_id)
@@ -81,8 +123,12 @@ async fn get_identity(
 /// Link an existing identity to another platform
 async fn link_identity(
     data: web::Data<AppState>,
+    req: HttpRequest,
     body: web::Json<LinkIdentityRequest>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     // First check if this platform/user already has an identity
     if let Ok(Some(_)) = data
         .db
@@ -124,8 +170,12 @@ async fn link_identity(
 /// Get all linked identities for a given identity_id
 async fn get_linked_identities(
     data: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<String>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     let identity_id = path.into_inner();
 
     match data.db.get_linked_identities(&identity_id) {

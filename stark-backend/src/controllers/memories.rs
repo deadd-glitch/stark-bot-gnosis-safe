@@ -1,15 +1,53 @@
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use chrono::Utc;
 use serde::Deserialize;
 
 use crate::models::{CreateMemoryRequest, MemoryResponse, MemoryType, SearchMemoriesRequest};
 use crate::AppState;
 
+/// Validate session token from request
+fn validate_session_from_request(
+    state: &web::Data<AppState>,
+    req: &HttpRequest,
+) -> Result<(), HttpResponse> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim_start_matches("Bearer ").to_string());
+
+    let token = match token {
+        Some(t) => t,
+        None => {
+            return Err(HttpResponse::Unauthorized().json(serde_json::json!({
+                "error": "No authorization token provided"
+            })));
+        }
+    };
+
+    match state.db.validate_session(&token) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Invalid or expired session"
+        }))),
+        Err(e) => {
+            log::error!("Session validation error: {}", e);
+            Err(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Internal server error"
+            })))
+        }
+    }
+}
+
 /// Create a new memory
 async fn create_memory(
     data: web::Data<AppState>,
+    req: HttpRequest,
     body: web::Json<CreateMemoryRequest>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     // For daily logs, set log_date to today if not provided
     let log_date = if body.memory_type == MemoryType::DailyLog {
         body.log_date.or_else(|| Some(Utc::now().date_naive()))
@@ -46,8 +84,12 @@ async fn create_memory(
 /// Search memories using FTS5
 async fn search_memories(
     data: web::Data<AppState>,
+    req: HttpRequest,
     body: web::Json<SearchMemoriesRequest>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     match data.db.search_memories(
         &body.query,
         body.memory_type,
@@ -74,8 +116,12 @@ struct DailyLogsQuery {
 
 async fn get_daily_logs(
     data: web::Data<AppState>,
+    req: HttpRequest,
     query: web::Query<DailyLogsQuery>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     match data.db.get_todays_daily_logs(query.identity_id.as_deref()) {
         Ok(memories) => {
             let responses: Vec<MemoryResponse> = memories.into_iter().map(|m| m.into()).collect();
@@ -105,8 +151,12 @@ fn default_limit() -> i32 {
 
 async fn get_long_term_memories(
     data: web::Data<AppState>,
+    req: HttpRequest,
     query: web::Query<LongTermQuery>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     match data.db.get_long_term_memories(
         query.identity_id.as_deref(),
         query.min_importance,
@@ -128,8 +178,12 @@ async fn get_long_term_memories(
 /// Delete a memory
 async fn delete_memory(
     data: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<i64>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     let memory_id = path.into_inner();
 
     match data.db.delete_memory(memory_id) {
@@ -150,7 +204,10 @@ async fn delete_memory(
 }
 
 /// Cleanup expired memories
-async fn cleanup_expired(data: web::Data<AppState>) -> impl Responder {
+async fn cleanup_expired(data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     match data.db.cleanup_expired_memories() {
         Ok(count) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,

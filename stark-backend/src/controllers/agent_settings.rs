@@ -1,11 +1,49 @@
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use crate::models::{AgentSettingsResponse, AiProvider, UpdateAgentSettingsRequest};
 use crate::AppState;
+
+/// Validate session token from request
+fn validate_session_from_request(
+    state: &web::Data<AppState>,
+    req: &HttpRequest,
+) -> Result<(), HttpResponse> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim_start_matches("Bearer ").to_string());
+
+    let token = match token {
+        Some(t) => t,
+        None => {
+            return Err(HttpResponse::Unauthorized().json(serde_json::json!({
+                "error": "No authorization token provided"
+            })));
+        }
+    };
+
+    match state.db.validate_session(&token) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Invalid or expired session"
+        }))),
+        Err(e) => {
+            log::error!("Session validation error: {}", e);
+            Err(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Internal server error"
+            })))
+        }
+    }
+}
 
 /// Get current agent settings (active provider)
 pub async fn get_agent_settings(
     state: web::Data<AppState>,
+    req: HttpRequest,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
     match state.db.get_active_agent_settings() {
         Ok(Some(settings)) => {
             let response: AgentSettingsResponse = settings.into();
@@ -29,7 +67,11 @@ pub async fn get_agent_settings(
 /// List all configured providers
 pub async fn list_agent_settings(
     state: web::Data<AppState>,
+    req: HttpRequest,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
     match state.db.list_agent_settings() {
         Ok(settings) => {
             let responses: Vec<AgentSettingsResponse> = settings
@@ -48,7 +90,13 @@ pub async fn list_agent_settings(
 }
 
 /// Get available providers with defaults
-pub async fn get_available_providers() -> impl Responder {
+pub async fn get_available_providers(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
     let providers = vec![
         serde_json::json!({
             "id": "claude",
@@ -76,8 +124,12 @@ pub async fn get_available_providers() -> impl Responder {
 /// Update agent settings (set active provider)
 pub async fn update_agent_settings(
     state: web::Data<AppState>,
+    req: HttpRequest,
     body: web::Json<UpdateAgentSettingsRequest>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
     let request = body.into_inner();
 
     // Validate provider
@@ -126,7 +178,11 @@ pub async fn update_agent_settings(
 /// Disable agent (set no active provider)
 pub async fn disable_agent(
     state: web::Data<AppState>,
+    req: HttpRequest,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
     match state.db.disable_agent_settings() {
         Ok(_) => {
             log::info!("Disabled AI agent");

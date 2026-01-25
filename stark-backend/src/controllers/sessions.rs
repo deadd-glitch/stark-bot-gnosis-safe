@@ -1,4 +1,4 @@
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Deserialize;
 
 use crate::models::{
@@ -7,11 +7,49 @@ use crate::models::{
 };
 use crate::AppState;
 
+/// Validate session token from request
+fn validate_session_from_request(
+    state: &web::Data<AppState>,
+    req: &HttpRequest,
+) -> Result<(), HttpResponse> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim_start_matches("Bearer ").to_string());
+
+    let token = match token {
+        Some(t) => t,
+        None => {
+            return Err(HttpResponse::Unauthorized().json(serde_json::json!({
+                "error": "No authorization token provided"
+            })));
+        }
+    };
+
+    match state.db.validate_session(&token) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Invalid or expired session"
+        }))),
+        Err(e) => {
+            log::error!("Session validation error: {}", e);
+            Err(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Internal server error"
+            })))
+        }
+    }
+}
+
 /// Get or create a chat session
 async fn get_or_create_session(
     data: web::Data<AppState>,
+    req: HttpRequest,
     body: web::Json<GetOrCreateSessionRequest>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     let scope = body.scope.unwrap_or(SessionScope::Dm);
 
     match data.db.get_or_create_chat_session(
@@ -41,8 +79,12 @@ async fn get_or_create_session(
 /// Get a session by ID
 async fn get_session(
     data: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<i64>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     let session_id = path.into_inner();
 
     match data.db.get_chat_session(session_id) {
@@ -68,8 +110,12 @@ async fn get_session(
 /// Reset a session
 async fn reset_session(
     data: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<i64>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     let session_id = path.into_inner();
 
     match data.db.reset_chat_session(session_id) {
@@ -89,9 +135,13 @@ async fn reset_session(
 /// Update session reset policy
 async fn update_reset_policy(
     data: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<i64>,
     body: web::Json<UpdateResetPolicyRequest>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     let session_id = path.into_inner();
 
     match data.db.update_session_reset_policy(
@@ -124,9 +174,13 @@ struct TranscriptQuery {
 
 async fn get_transcript(
     data: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<i64>,
     query: web::Query<TranscriptQuery>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
     let session_id = path.into_inner();
 
     let messages = if let Some(limit) = query.limit {
