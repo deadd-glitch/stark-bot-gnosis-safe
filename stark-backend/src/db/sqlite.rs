@@ -218,6 +218,62 @@ impl Database {
             [],
         )?;
 
+        // Tool configuration table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tool_configs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER,
+                profile TEXT NOT NULL DEFAULT 'standard',
+                allow_list TEXT NOT NULL DEFAULT '[]',
+                deny_list TEXT NOT NULL DEFAULT '[]',
+                allowed_groups TEXT NOT NULL DEFAULT '[\"web\", \"filesystem\"]',
+                denied_groups TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(channel_id)
+            )",
+            [],
+        )?;
+
+        // Installed skills table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS installed_skills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                version TEXT NOT NULL,
+                source TEXT NOT NULL,
+                path TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                metadata TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+
+        // Tool execution audit log
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tool_executions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                session_id INTEGER,
+                tool_name TEXT NOT NULL,
+                parameters TEXT NOT NULL,
+                success INTEGER NOT NULL,
+                result TEXT,
+                duration_ms INTEGER,
+                executed_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE SET NULL
+            )",
+            [],
+        )?;
+
+        // Create index for tool executions lookup
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tool_executions_channel ON tool_executions(channel_id, executed_at)",
+            [],
+        )?;
+
         Ok(())
     }
 
@@ -1502,5 +1558,336 @@ impl Database {
                     .with_timezone(&Utc)
             }),
         })
+    }
+
+    // Tool Configuration methods
+
+    /// Get global tool config (channel_id = NULL)
+    pub fn get_global_tool_config(&self) -> SqliteResult<Option<crate::tools::ToolConfig>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, channel_id, profile, allow_list, deny_list, allowed_groups, denied_groups
+             FROM tool_configs WHERE channel_id IS NULL"
+        )?;
+
+        let config = stmt
+            .query_row([], |row| {
+                let allow_list: String = row.get(3)?;
+                let deny_list: String = row.get(4)?;
+                let allowed_groups: String = row.get(5)?;
+                let denied_groups: String = row.get(6)?;
+                let profile_str: String = row.get(2)?;
+
+                Ok(crate::tools::ToolConfig {
+                    id: row.get(0)?,
+                    channel_id: row.get(1)?,
+                    profile: crate::tools::ToolProfile::from_str(&profile_str)
+                        .unwrap_or_default(),
+                    allow_list: serde_json::from_str(&allow_list).unwrap_or_default(),
+                    deny_list: serde_json::from_str(&deny_list).unwrap_or_default(),
+                    allowed_groups: serde_json::from_str(&allowed_groups).unwrap_or_default(),
+                    denied_groups: serde_json::from_str(&denied_groups).unwrap_or_default(),
+                })
+            })
+            .ok();
+
+        Ok(config)
+    }
+
+    /// Get tool config for a specific channel
+    pub fn get_channel_tool_config(&self, channel_id: i64) -> SqliteResult<Option<crate::tools::ToolConfig>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, channel_id, profile, allow_list, deny_list, allowed_groups, denied_groups
+             FROM tool_configs WHERE channel_id = ?1"
+        )?;
+
+        let config = stmt
+            .query_row([channel_id], |row| {
+                let allow_list: String = row.get(3)?;
+                let deny_list: String = row.get(4)?;
+                let allowed_groups: String = row.get(5)?;
+                let denied_groups: String = row.get(6)?;
+                let profile_str: String = row.get(2)?;
+
+                Ok(crate::tools::ToolConfig {
+                    id: row.get(0)?,
+                    channel_id: row.get(1)?,
+                    profile: crate::tools::ToolProfile::from_str(&profile_str)
+                        .unwrap_or_default(),
+                    allow_list: serde_json::from_str(&allow_list).unwrap_or_default(),
+                    deny_list: serde_json::from_str(&deny_list).unwrap_or_default(),
+                    allowed_groups: serde_json::from_str(&allowed_groups).unwrap_or_default(),
+                    denied_groups: serde_json::from_str(&denied_groups).unwrap_or_default(),
+                })
+            })
+            .ok();
+
+        Ok(config)
+    }
+
+    /// Get effective tool config for a channel (falls back to global if channel config doesn't exist)
+    pub fn get_effective_tool_config(&self, channel_id: Option<i64>) -> SqliteResult<crate::tools::ToolConfig> {
+        if let Some(cid) = channel_id {
+            if let Some(config) = self.get_channel_tool_config(cid)? {
+                return Ok(config);
+            }
+        }
+
+        Ok(self.get_global_tool_config()?.unwrap_or_default())
+    }
+
+    /// Save tool config (upsert)
+    pub fn save_tool_config(&self, config: &crate::tools::ToolConfig) -> SqliteResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+
+        let profile_str = match &config.profile {
+            crate::tools::ToolProfile::None => "none",
+            crate::tools::ToolProfile::Minimal => "minimal",
+            crate::tools::ToolProfile::Standard => "standard",
+            crate::tools::ToolProfile::Messaging => "messaging",
+            crate::tools::ToolProfile::Full => "full",
+            crate::tools::ToolProfile::Custom => "custom",
+        };
+
+        let allow_list_json = serde_json::to_string(&config.allow_list).unwrap_or_default();
+        let deny_list_json = serde_json::to_string(&config.deny_list).unwrap_or_default();
+        let allowed_groups_json = serde_json::to_string(&config.allowed_groups).unwrap_or_default();
+        let denied_groups_json = serde_json::to_string(&config.denied_groups).unwrap_or_default();
+
+        if config.channel_id.is_some() {
+            conn.execute(
+                "INSERT INTO tool_configs (channel_id, profile, allow_list, deny_list, allowed_groups, denied_groups, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+                 ON CONFLICT(channel_id) DO UPDATE SET
+                    profile = excluded.profile,
+                    allow_list = excluded.allow_list,
+                    deny_list = excluded.deny_list,
+                    allowed_groups = excluded.allowed_groups,
+                    denied_groups = excluded.denied_groups,
+                    updated_at = excluded.updated_at",
+                rusqlite::params![
+                    config.channel_id,
+                    profile_str,
+                    allow_list_json,
+                    deny_list_json,
+                    allowed_groups_json,
+                    denied_groups_json,
+                    now
+                ],
+            )?;
+        } else {
+            // Global config (channel_id = NULL) - need special handling
+            conn.execute(
+                "DELETE FROM tool_configs WHERE channel_id IS NULL",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tool_configs (channel_id, profile, allow_list, deny_list, allowed_groups, denied_groups, created_at, updated_at)
+                 VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                rusqlite::params![
+                    profile_str,
+                    allow_list_json,
+                    deny_list_json,
+                    allowed_groups_json,
+                    denied_groups_json,
+                    now
+                ],
+            )?;
+        }
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    // Tool Execution logging methods
+
+    /// Log a tool execution
+    pub fn log_tool_execution(&self, execution: &crate::tools::ToolExecution) -> SqliteResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        let params_json = serde_json::to_string(&execution.parameters).unwrap_or_default();
+
+        conn.execute(
+            "INSERT INTO tool_executions (channel_id, session_id, tool_name, parameters, success, result, duration_ms, executed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                execution.channel_id,
+                None::<i64>, // session_id could be added if needed
+                execution.tool_name,
+                params_json,
+                execution.success as i32,
+                execution.result,
+                execution.duration_ms,
+                execution.executed_at
+            ],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get tool execution history for a channel
+    pub fn get_tool_execution_history(
+        &self,
+        channel_id: i64,
+        limit: i32,
+        offset: i32,
+    ) -> SqliteResult<Vec<crate::tools::ToolExecution>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, channel_id, tool_name, parameters, success, result, duration_ms, executed_at
+             FROM tool_executions WHERE channel_id = ?1 ORDER BY executed_at DESC LIMIT ?2 OFFSET ?3"
+        )?;
+
+        let executions: Vec<crate::tools::ToolExecution> = stmt
+            .query_map(rusqlite::params![channel_id, limit, offset], |row| {
+                let params_str: String = row.get(3)?;
+                Ok(crate::tools::ToolExecution {
+                    id: row.get(0)?,
+                    channel_id: row.get(1)?,
+                    tool_name: row.get(2)?,
+                    parameters: serde_json::from_str(&params_str).unwrap_or_default(),
+                    success: row.get::<_, i32>(4)? != 0,
+                    result: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    executed_at: row.get(7)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(executions)
+    }
+
+    /// Get all tool execution history
+    pub fn get_all_tool_execution_history(
+        &self,
+        limit: i32,
+        offset: i32,
+    ) -> SqliteResult<Vec<crate::tools::ToolExecution>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, channel_id, tool_name, parameters, success, result, duration_ms, executed_at
+             FROM tool_executions ORDER BY executed_at DESC LIMIT ?1 OFFSET ?2"
+        )?;
+
+        let executions: Vec<crate::tools::ToolExecution> = stmt
+            .query_map(rusqlite::params![limit, offset], |row| {
+                let params_str: String = row.get(3)?;
+                Ok(crate::tools::ToolExecution {
+                    id: row.get(0)?,
+                    channel_id: row.get(1)?,
+                    tool_name: row.get(2)?,
+                    parameters: serde_json::from_str(&params_str).unwrap_or_default(),
+                    success: row.get::<_, i32>(4)? != 0,
+                    result: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    executed_at: row.get(7)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(executions)
+    }
+
+    // Installed Skills methods
+
+    /// Save an installed skill to the database
+    pub fn save_installed_skill(&self, skill: &crate::skills::InstalledSkill) -> SqliteResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT INTO installed_skills (name, version, source, path, enabled, metadata, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+             ON CONFLICT(name) DO UPDATE SET
+                version = excluded.version,
+                source = excluded.source,
+                path = excluded.path,
+                enabled = excluded.enabled,
+                metadata = excluded.metadata,
+                updated_at = excluded.updated_at",
+            rusqlite::params![
+                skill.name,
+                skill.version,
+                skill.source,
+                skill.path,
+                skill.enabled as i32,
+                skill.metadata,
+                now
+            ],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get an installed skill by name
+    pub fn get_installed_skill(&self, name: &str) -> SqliteResult<Option<crate::skills::InstalledSkill>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, version, source, path, enabled, metadata FROM installed_skills WHERE name = ?1"
+        )?;
+
+        let skill = stmt
+            .query_row([name], |row| {
+                Ok(crate::skills::InstalledSkill {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    version: row.get(2)?,
+                    source: row.get(3)?,
+                    path: row.get(4)?,
+                    enabled: row.get::<_, i32>(5)? != 0,
+                    metadata: row.get(6)?,
+                })
+            })
+            .ok();
+
+        Ok(skill)
+    }
+
+    /// List all installed skills
+    pub fn list_installed_skills(&self) -> SqliteResult<Vec<crate::skills::InstalledSkill>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, version, source, path, enabled, metadata FROM installed_skills ORDER BY name"
+        )?;
+
+        let skills: Vec<crate::skills::InstalledSkill> = stmt
+            .query_map([], |row| {
+                Ok(crate::skills::InstalledSkill {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    version: row.get(2)?,
+                    source: row.get(3)?,
+                    path: row.get(4)?,
+                    enabled: row.get::<_, i32>(5)? != 0,
+                    metadata: row.get(6)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(skills)
+    }
+
+    /// Update skill enabled status
+    pub fn set_skill_enabled(&self, name: &str, enabled: bool) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let rows_affected = conn.execute(
+            "UPDATE installed_skills SET enabled = ?1, updated_at = ?2 WHERE name = ?3",
+            rusqlite::params![enabled as i32, now, name],
+        )?;
+        Ok(rows_affected > 0)
+    }
+
+    /// Delete an installed skill
+    pub fn delete_installed_skill(&self, name: &str) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let rows_affected = conn.execute(
+            "DELETE FROM installed_skills WHERE name = ?1",
+            [name],
+        )?;
+        Ok(rows_affected > 0)
     }
 }

@@ -1,18 +1,23 @@
-use crate::ai::{AiClient, Message, MessageRole};
+use crate::ai::{AiClient, Message, MessageRole, TypedClaudeMessage, ToolCall, ToolResponse};
 use crate::channels::types::{DispatchResult, NormalizedMessage};
 use crate::db::Database;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::{MemoryType, SessionScope};
 use crate::models::session_message::MessageRole as DbMessageRole;
+use crate::tools::{ToolConfig, ToolContext, ToolExecution, ToolRegistry};
 use chrono::Utc;
 use regex::Regex;
 use std::sync::Arc;
+
+/// Maximum number of tool execution iterations
+const MAX_TOOL_ITERATIONS: usize = 10;
 
 /// Dispatcher routes messages to the AI and returns responses
 pub struct MessageDispatcher {
     db: Arc<Database>,
     broadcaster: Arc<EventBroadcaster>,
+    tool_registry: Arc<ToolRegistry>,
     // Regex patterns for memory markers
     daily_log_pattern: Regex,
     remember_pattern: Regex,
@@ -20,10 +25,27 @@ pub struct MessageDispatcher {
 }
 
 impl MessageDispatcher {
-    pub fn new(db: Arc<Database>, broadcaster: Arc<EventBroadcaster>) -> Self {
+    pub fn new(
+        db: Arc<Database>,
+        broadcaster: Arc<EventBroadcaster>,
+        tool_registry: Arc<ToolRegistry>,
+    ) -> Self {
         Self {
             db,
             broadcaster,
+            tool_registry,
+            daily_log_pattern: Regex::new(r"\[DAILY_LOG:\s*(.+?)\]").unwrap(),
+            remember_pattern: Regex::new(r"\[REMEMBER:\s*(.+?)\]").unwrap(),
+            remember_important_pattern: Regex::new(r"\[REMEMBER_IMPORTANT:\s*(.+?)\]").unwrap(),
+        }
+    }
+
+    /// Create a dispatcher without tool support (for backwards compatibility)
+    pub fn new_without_tools(db: Arc<Database>, broadcaster: Arc<EventBroadcaster>) -> Self {
+        Self {
+            db,
+            broadcaster,
+            tool_registry: Arc::new(ToolRegistry::new()),
             daily_log_pattern: Regex::new(r"\[DAILY_LOG:\s*(.+?)\]").unwrap(),
             remember_pattern: Regex::new(r"\[REMEMBER:\s*(.+?)\]").unwrap(),
             remember_important_pattern: Regex::new(r"\[REMEMBER_IMPORTANT:\s*(.+?)\]").unwrap(),
@@ -156,8 +178,35 @@ impl MessageDispatcher {
             content: message.text.clone(),
         });
 
-        // Generate response
-        match client.generate_text(messages).await {
+        // Get tool configuration for this channel
+        let tool_config = self.db.get_effective_tool_config(Some(message.channel_id))
+            .unwrap_or_default();
+
+        // Check if the client supports tools and tools are configured
+        let use_tools = client.supports_tools() && !self.tool_registry.is_empty();
+
+        // Build tool context
+        let tool_context = ToolContext::new()
+            .with_channel(message.channel_id, message.channel_type.clone())
+            .with_user(message.user_id.clone());
+
+        // Generate response with optional tool execution loop
+        let final_response = if use_tools {
+            self.generate_with_tool_loop(
+                &client,
+                messages,
+                &tool_config,
+                &tool_context,
+                &identity.identity_id,
+                session.id,
+                &message,
+            ).await
+        } else {
+            // Simple generation without tools
+            client.generate_text(messages).await
+        };
+
+        match final_response {
             Ok(response) => {
                 // Parse and create memories from the response
                 self.process_memory_markers(
@@ -206,6 +255,136 @@ impl MessageDispatcher {
                 DispatchResult::error(error)
             }
         }
+    }
+
+    /// Generate a response with tool execution loop
+    async fn generate_with_tool_loop(
+        &self,
+        client: &AiClient,
+        messages: Vec<Message>,
+        tool_config: &ToolConfig,
+        tool_context: &ToolContext,
+        identity_id: &str,
+        session_id: i64,
+        original_message: &NormalizedMessage,
+    ) -> Result<String, String> {
+        let tools = self.tool_registry.get_tool_definitions(tool_config);
+
+        if tools.is_empty() {
+            // No tools available, fall back to regular generation
+            return client.generate_text(messages).await;
+        }
+
+        let mut tool_messages: Vec<TypedClaudeMessage> = Vec::new();
+        let mut accumulated_content = String::new();
+        let mut iterations = 0;
+
+        loop {
+            iterations += 1;
+            if iterations > MAX_TOOL_ITERATIONS {
+                log::warn!("Tool execution loop exceeded max iterations ({})", MAX_TOOL_ITERATIONS);
+                break;
+            }
+
+            // Generate response with tools
+            let ai_response = client
+                .generate_with_tools(messages.clone(), tool_messages.clone(), tools.clone())
+                .await?;
+
+            // Accumulate any text content
+            if !ai_response.content.is_empty() {
+                if !accumulated_content.is_empty() {
+                    accumulated_content.push(' ');
+                }
+                accumulated_content.push_str(&ai_response.content);
+            }
+
+            // Check if we're done (no tool calls or stop reason is not tool_use)
+            if !ai_response.is_tool_use() || ai_response.tool_calls.is_empty() {
+                break;
+            }
+
+            // Execute tool calls
+            let tool_responses = self
+                .execute_tool_calls(
+                    &ai_response.tool_calls,
+                    tool_config,
+                    tool_context,
+                    original_message.channel_id,
+                )
+                .await;
+
+            // Build tool messages for next iteration
+            let new_tool_messages =
+                AiClient::build_tool_result_messages(&ai_response.tool_calls, &tool_responses);
+            tool_messages.extend(new_tool_messages);
+        }
+
+        if accumulated_content.is_empty() {
+            return Err("AI returned empty response after tool execution".to_string());
+        }
+
+        Ok(accumulated_content)
+    }
+
+    /// Execute a list of tool calls and return responses
+    async fn execute_tool_calls(
+        &self,
+        tool_calls: &[ToolCall],
+        tool_config: &ToolConfig,
+        tool_context: &ToolContext,
+        channel_id: i64,
+    ) -> Vec<ToolResponse> {
+        let mut responses = Vec::new();
+
+        for call in tool_calls {
+            let start = std::time::Instant::now();
+
+            // Emit tool execution event
+            self.broadcaster.broadcast(GatewayEvent::tool_execution(
+                channel_id,
+                &call.name,
+                &call.arguments,
+            ));
+
+            // Execute the tool
+            let result = self
+                .tool_registry
+                .execute(&call.name, call.arguments.clone(), tool_context, Some(tool_config))
+                .await;
+
+            let duration_ms = start.elapsed().as_millis() as i64;
+
+            // Log the execution
+            if let Err(e) = self.db.log_tool_execution(&ToolExecution {
+                id: None,
+                channel_id,
+                tool_name: call.name.clone(),
+                parameters: call.arguments.clone(),
+                success: result.success,
+                result: Some(result.content.clone()),
+                duration_ms: Some(duration_ms),
+                executed_at: Utc::now().to_rfc3339(),
+            }) {
+                log::error!("Failed to log tool execution: {}", e);
+            }
+
+            log::info!(
+                "Tool '{}' executed in {}ms, success: {}",
+                call.name,
+                duration_ms,
+                result.success
+            );
+
+            // Create tool response
+            responses.push(if result.success {
+                ToolResponse::success(call.id.clone(), result.content)
+            } else {
+                ToolResponse::error(call.id.clone(), result.content)
+            });
+        }
+
+        responses
     }
 
     /// Build the system prompt with context from memories

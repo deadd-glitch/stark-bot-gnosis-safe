@@ -154,6 +154,39 @@ impl GatewayEvent {
             }),
         )
     }
+
+    pub fn tool_execution(channel_id: i64, tool_name: &str, parameters: &Value) -> Self {
+        Self::new(
+            "tool.execution",
+            serde_json::json!({
+                "channel_id": channel_id,
+                "tool_name": tool_name,
+                "parameters": parameters
+            }),
+        )
+    }
+
+    pub fn tool_result(channel_id: i64, tool_name: &str, success: bool, duration_ms: i64) -> Self {
+        Self::new(
+            "tool.result",
+            serde_json::json!({
+                "channel_id": channel_id,
+                "tool_name": tool_name,
+                "success": success,
+                "duration_ms": duration_ms
+            }),
+        )
+    }
+
+    pub fn skill_invoked(channel_id: i64, skill_name: &str) -> Self {
+        Self::new(
+            "skill.invoked",
+            serde_json::json!({
+                "channel_id": channel_id,
+                "skill_name": skill_name
+            }),
+        )
+    }
 }
 
 /// Params for channel operations

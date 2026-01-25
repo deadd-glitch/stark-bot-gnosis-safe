@@ -8,6 +8,7 @@ pub use server::GatewayServer;
 
 use crate::channels::ChannelManager;
 use crate::db::Database;
+use crate::tools::ToolRegistry;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -22,6 +23,22 @@ impl Gateway {
     pub fn new(db: Arc<Database>) -> Self {
         let broadcaster = Arc::new(EventBroadcaster::new());
         let channel_manager = Arc::new(ChannelManager::new(db.clone(), broadcaster.clone()));
+
+        Self {
+            db,
+            channel_manager,
+            broadcaster,
+        }
+    }
+
+    /// Create a new Gateway with tool registry support
+    pub fn new_with_tools(db: Arc<Database>, tool_registry: Arc<ToolRegistry>) -> Self {
+        let broadcaster = Arc::new(EventBroadcaster::new());
+        let channel_manager = Arc::new(ChannelManager::new_with_tools(
+            db.clone(),
+            broadcaster.clone(),
+            tool_registry,
+        ));
 
         Self {
             db,

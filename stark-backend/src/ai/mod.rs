@@ -1,12 +1,15 @@
 pub mod claude;
 pub mod llama;
 pub mod openai;
+pub mod types;
 
 pub use claude::ClaudeClient;
 pub use llama::LlamaClient;
 pub use openai::OpenAIClient;
+pub use types::{AiResponse, ClaudeMessage as TypedClaudeMessage, ToolCall, ToolResponse};
 
 use crate::models::{AgentSettings, AiProvider};
+use crate::tools::ToolDefinition;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,5 +84,41 @@ impl AiClient {
             AiClient::OpenAI(client) => client.generate_text(messages).await,
             AiClient::Llama(client) => client.generate_text(messages).await,
         }
+    }
+
+    /// Generate response with tool support (currently only Claude supports tools)
+    pub async fn generate_with_tools(
+        &self,
+        messages: Vec<Message>,
+        tool_messages: Vec<TypedClaudeMessage>,
+        tools: Vec<ToolDefinition>,
+    ) -> Result<AiResponse, String> {
+        match self {
+            AiClient::Claude(client) => {
+                client.generate_with_tools(messages, tool_messages, tools).await
+            }
+            // Other providers fall back to text-only generation
+            AiClient::OpenAI(client) => {
+                let text = client.generate_text(messages).await?;
+                Ok(AiResponse::text(text))
+            }
+            AiClient::Llama(client) => {
+                let text = client.generate_text(messages).await?;
+                Ok(AiResponse::text(text))
+            }
+        }
+    }
+
+    /// Check if the current provider supports tools
+    pub fn supports_tools(&self) -> bool {
+        matches!(self, AiClient::Claude(_))
+    }
+
+    /// Build tool result messages for continuing after tool execution (Claude-specific)
+    pub fn build_tool_result_messages(
+        tool_calls: &[ToolCall],
+        tool_responses: &[ToolResponse],
+    ) -> Vec<TypedClaudeMessage> {
+        ClaudeClient::build_tool_result_messages(tool_calls, tool_responses)
     }
 }

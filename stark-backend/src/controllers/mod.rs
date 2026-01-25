@@ -8,3 +8,5 @@ pub mod health;
 pub mod identity;
 pub mod memories;
 pub mod sessions;
+pub mod skills;
+pub mod tools;

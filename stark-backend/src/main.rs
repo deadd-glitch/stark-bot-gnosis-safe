@@ -12,15 +12,21 @@ mod db;
 mod gateway;
 mod middleware;
 mod models;
+mod skills;
+mod tools;
 
 use config::Config;
 use db::Database;
 use gateway::Gateway;
+use skills::SkillRegistry;
+use tools::ToolRegistry;
 
 pub struct AppState {
     pub db: Arc<Database>,
     pub config: Config,
     pub gateway: Arc<Gateway>,
+    pub tool_registry: Arc<ToolRegistry>,
+    pub skill_registry: Arc<SkillRegistry>,
 }
 
 #[actix_web::main]
@@ -36,9 +42,25 @@ async fn main() -> std::io::Result<()> {
     let db = Database::new(&config.database_url).expect("Failed to initialize database");
     let db = Arc::new(db);
 
-    // Initialize Gateway
+    // Initialize Tool Registry with built-in tools
+    log::info!("Initializing tool registry");
+    let tool_registry = Arc::new(tools::create_default_registry());
+    log::info!("Registered {} tools", tool_registry.len());
+
+    // Initialize Skill Registry
+    log::info!("Initializing skill registry");
+    let skill_registry = Arc::new(skills::create_default_registry());
+
+    // Load skills from disk
+    let skill_count = skill_registry.load_all().await.unwrap_or_else(|e| {
+        log::warn!("Failed to load skills: {}", e);
+        0
+    });
+    log::info!("Loaded {} skills", skill_count);
+
+    // Initialize Gateway with tool registry
     log::info!("Initializing Gateway");
-    let gateway = Arc::new(Gateway::new(db.clone()));
+    let gateway = Arc::new(Gateway::new_with_tools(db.clone(), tool_registry.clone()));
 
     // Start Gateway WebSocket server
     let gw = gateway.clone();
@@ -53,6 +75,9 @@ async fn main() -> std::io::Result<()> {
     log::info!("Starting StarkBot server on port {}", port);
     log::info!("Gateway WebSocket server on port {}", gateway_port);
 
+    let tool_reg = tool_registry.clone();
+    let skill_reg = skill_registry.clone();
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .allow_any_origin()
@@ -65,6 +90,8 @@ async fn main() -> std::io::Result<()> {
                 db: Arc::clone(&db),
                 config: config.clone(),
                 gateway: Arc::clone(&gateway),
+                tool_registry: Arc::clone(&tool_reg),
+                skill_registry: Arc::clone(&skill_reg),
             }))
             .wrap(Logger::default())
             .wrap(cors)
@@ -78,6 +105,8 @@ async fn main() -> std::io::Result<()> {
             .configure(controllers::sessions::config)
             .configure(controllers::memories::config)
             .configure(controllers::identity::config)
+            .configure(controllers::tools::config)
+            .configure(controllers::skills::config)
             .service(Files::new("/", "./stark-frontend").index_file("index.html"))
     })
     .bind(("0.0.0.0", port))?

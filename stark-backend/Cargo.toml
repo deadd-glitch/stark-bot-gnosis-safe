@@ -34,3 +34,9 @@ dashmap = "5"
 
 # Regex for memory marker parsing
 regex = "1"
+
+# Tools system
+which = "5"
+
+[dev-dependencies]
+tempfile = "3"

@@ -10,6 +10,7 @@ use crate::db::Database;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::Channel;
+use crate::tools::ToolRegistry;
 use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -19,6 +20,7 @@ pub struct ChannelManager {
     db: Arc<Database>,
     broadcaster: Arc<EventBroadcaster>,
     running_channels: Arc<DashMap<i64, ChannelHandle>>,
+    tool_registry: Option<Arc<ToolRegistry>>,
 }
 
 impl ChannelManager {
@@ -27,6 +29,20 @@ impl ChannelManager {
             db,
             broadcaster,
             running_channels: Arc::new(DashMap::new()),
+            tool_registry: None,
+        }
+    }
+
+    pub fn new_with_tools(
+        db: Arc<Database>,
+        broadcaster: Arc<EventBroadcaster>,
+        tool_registry: Arc<ToolRegistry>,
+    ) -> Self {
+        Self {
+            db,
+            broadcaster,
+            running_channels: Arc::new(DashMap::new()),
+            tool_registry: Some(tool_registry),
         }
     }
 
@@ -54,11 +70,19 @@ impl ChannelManager {
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        // Create dispatcher
-        let dispatcher = Arc::new(MessageDispatcher::new(
-            self.db.clone(),
-            self.broadcaster.clone(),
-        ));
+        // Create dispatcher with or without tools
+        let dispatcher = if let Some(ref tool_registry) = self.tool_registry {
+            Arc::new(MessageDispatcher::new(
+                self.db.clone(),
+                self.broadcaster.clone(),
+                tool_registry.clone(),
+            ))
+        } else {
+            Arc::new(MessageDispatcher::new_without_tools(
+                self.db.clone(),
+                self.broadcaster.clone(),
+            ))
+        };
 
         // Store handle
         let handle = ChannelHandle::new(
