@@ -50,7 +50,7 @@ impl X402Client {
         url: &str,
         body: &T,
     ) -> Result<X402Response, String> {
-        log::info!("[X402] Making request to {}", url);
+        log::info!("[X402] Making POST request to {}", url);
 
         // First request without payment
         let initial_response = self.client
@@ -61,6 +61,43 @@ impl X402Client {
             .await
             .map_err(|e| format!("Request failed: {}", e))?;
 
+        self.handle_402_response(initial_response, || {
+            self.client
+                .post(url)
+                .header(header::CONTENT_TYPE, "application/json")
+                .json(body)
+        }).await
+    }
+
+    /// Make a GET request with automatic x402 payment handling
+    /// Returns both the response and payment info if a payment was made
+    pub async fn get_with_payment(
+        &self,
+        url: &str,
+    ) -> Result<X402Response, String> {
+        log::info!("[X402] Making GET request to {}", url);
+
+        // First request without payment
+        let initial_response = self.client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {}", e))?;
+
+        self.handle_402_response(initial_response, || {
+            self.client.get(url)
+        }).await
+    }
+
+    /// Handle 402 response and retry with payment if needed
+    async fn handle_402_response<F>(
+        &self,
+        initial_response: Response,
+        build_request: F,
+    ) -> Result<X402Response, String>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
         // Check if payment is required
         if initial_response.status().as_u16() != 402 {
             log::info!("[X402] No payment required, status: {}", initial_response.status());
@@ -109,11 +146,8 @@ impl X402Client {
         );
 
         // Retry with payment
-        let paid_response = self.client
-            .post(url)
-            .header(header::CONTENT_TYPE, "application/json")
+        let paid_response = build_request()
             .header("X-PAYMENT", payment_header_value)
-            .json(body)
             .send()
             .await
             .map_err(|e| format!("Paid request failed: {}", e))?;

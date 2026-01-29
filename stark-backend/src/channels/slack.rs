@@ -1,4 +1,5 @@
 use crate::channels::dispatcher::MessageDispatcher;
+use crate::channels::types::ChannelType;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::Channel;
@@ -38,7 +39,7 @@ pub async fn start_slack_listener(
     // Emit started event
     broadcaster.broadcast(GatewayEvent::channel_started(
         channel_id,
-        "slack",
+        ChannelType::Slack.as_str(),
         &channel_name,
     ));
 
@@ -78,7 +79,7 @@ pub async fn start_slack_listener(
     // Emit stopped event
     broadcaster.broadcast(GatewayEvent::channel_stopped(
         channel_id,
-        "slack",
+        ChannelType::Slack.as_str(),
         &channel_name,
     ));
 

@@ -6,10 +6,12 @@ import TypingIndicator from '@/components/chat/TypingIndicator';
 import ExecutionProgress from '@/components/chat/ExecutionProgress';
 import DebugPanel from '@/components/chat/DebugPanel';
 import CommandAutocomplete from '@/components/chat/CommandAutocomplete';
+import TransactionTracker from '@/components/chat/TransactionTracker';
+import { ConfirmationPrompt } from '@/components/chat/ConfirmationPrompt';
 import { useGateway } from '@/hooks/useGateway';
 import { useWallet } from '@/hooks/useWallet';
-import { sendChatMessage, getAgentSettings, getSkills, getTools } from '@/lib/api';
-import type { ChatMessage as ChatMessageType, MessageRole, SlashCommand } from '@/types';
+import { sendChatMessage, getAgentSettings, getSkills, getTools, confirmTransaction, cancelTransaction } from '@/lib/api';
+import type { ChatMessage as ChatMessageType, MessageRole, SlashCommand, TrackedTransaction, TxPendingEvent, TxConfirmedEvent, PendingConfirmation, ConfirmationRequiredEvent } from '@/types';
 
 interface ConversationMessage {
   role: string;
@@ -25,10 +27,12 @@ export default function AgentChat() {
   const [debugMode, setDebugMode] = useState(false);
   const [sessionStartTime] = useState(new Date());
   const [copied, setCopied] = useState(false);
+  const [trackedTxs, setTrackedTxs] = useState<TrackedTransaction[]>([]);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const { connected } = useGateway();
+  const { connected, on, off } = useGateway();
   const { address, usdcBalance, isConnected: walletConnected, connect: connectWallet, isCorrectNetwork } = useWallet();
 
   // Helper to truncate address
@@ -185,6 +189,49 @@ export default function AgentChat() {
         addMessage('system', `Debug mode ${!debugMode ? 'enabled' : 'disabled'}.`);
       },
     },
+    {
+      name: 'confirm',
+      description: 'Confirm pending transaction',
+      handler: async () => {
+        if (!pendingConfirmation) {
+          addMessage('system', 'No pending transaction to confirm.');
+          return;
+        }
+        try {
+          addMessage('system', 'Confirming transaction...');
+          const result = await confirmTransaction(pendingConfirmation.channel_id);
+          if (result.success) {
+            addMessage('system', result.message || 'Transaction confirmed and executing.');
+            setPendingConfirmation(null);
+          } else {
+            addMessage('error', result.error || 'Failed to confirm transaction.');
+          }
+        } catch (error) {
+          addMessage('error', error instanceof Error ? error.message : 'Failed to confirm transaction');
+        }
+      },
+    },
+    {
+      name: 'cancel',
+      description: 'Cancel pending transaction',
+      handler: async () => {
+        if (!pendingConfirmation) {
+          addMessage('system', 'No pending transaction to cancel.');
+          return;
+        }
+        try {
+          const result = await cancelTransaction(pendingConfirmation.channel_id);
+          if (result.success) {
+            addMessage('system', result.message || 'Transaction cancelled.');
+            setPendingConfirmation(null);
+          } else {
+            addMessage('error', result.error || 'Failed to cancel transaction.');
+          }
+        } catch (error) {
+          addMessage('error', error instanceof Error ? error.message : 'Failed to cancel transaction');
+        }
+      },
+    },
   ];
 
   const scrollToBottom = useCallback(() => {
@@ -194,6 +241,148 @@ export default function AgentChat() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  // Listen for real-time tool call events from the agent
+  useEffect(() => {
+    const handleToolCall = (data: unknown) => {
+      const event = data as { tool_name: string; parameters: Record<string, unknown> };
+      const paramsPretty = JSON.stringify(event.parameters, null, 2);
+      const content = `🔧 **Tool Call:** \`${event.tool_name}\`\n\`\`\`json\n${paramsPretty}\n\`\`\``;
+
+      const message: ChatMessageType = {
+        id: crypto.randomUUID(),
+        role: 'tool' as MessageRole,
+        content,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, message]);
+    };
+
+    on('agent.tool_call', handleToolCall);
+    return () => {
+      off('agent.tool_call', handleToolCall);
+    };
+  }, [on, off]);
+
+  // Listen for tool result events to show success/failure in chat
+  useEffect(() => {
+    const handleToolResult = (data: unknown) => {
+      const event = data as { tool_name: string; success: boolean; duration_ms: number; content: string };
+      const statusEmoji = event.success ? '✅' : '❌';
+      const statusText = event.success ? 'Success' : 'Failed';
+
+      // Truncate content if too long for chat display
+      let displayContent = event.content;
+      if (displayContent.length > 2000) {
+        displayContent = displayContent.substring(0, 2000) + '\n... (truncated)';
+      }
+
+      const content = `${statusEmoji} **Tool Result:** \`${event.tool_name}\` - ${statusText} (${event.duration_ms}ms)\n\`\`\`\n${displayContent}\n\`\`\``;
+
+      const message: ChatMessageType = {
+        id: crypto.randomUUID(),
+        role: event.success ? 'tool' as MessageRole : 'error' as MessageRole,
+        content,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, message]);
+    };
+
+    on('tool.result', handleToolResult);
+    return () => {
+      off('tool.result', handleToolResult);
+    };
+  }, [on, off]);
+
+  // Listen for transaction events
+  useEffect(() => {
+    const handleTxPending = (data: unknown) => {
+      const event = data as TxPendingEvent;
+      console.log('[TX] Pending transaction:', event.tx_hash);
+
+      setTrackedTxs((prev) => {
+        // Avoid duplicates
+        if (prev.some((tx) => tx.tx_hash === event.tx_hash)) {
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            tx_hash: event.tx_hash,
+            network: event.network,
+            explorer_url: event.explorer_url,
+            status: 'pending',
+            timestamp: new Date(),
+          },
+        ];
+      });
+    };
+
+    const handleTxConfirmed = (data: unknown) => {
+      const event = data as TxConfirmedEvent;
+      console.log('[TX] Transaction confirmed:', event.tx_hash, event.status);
+
+      setTrackedTxs((prev) =>
+        prev.map((tx) =>
+          tx.tx_hash === event.tx_hash
+            ? { ...tx, status: event.status as 'confirmed' | 'reverted' | 'pending' }
+            : tx
+        )
+      );
+
+      // Auto-remove confirmed transactions after 30 seconds
+      if (event.status === 'confirmed') {
+        setTimeout(() => {
+          setTrackedTxs((prev) => prev.filter((tx) => tx.tx_hash !== event.tx_hash));
+        }, 30000);
+      }
+    };
+
+    on('tx.pending', handleTxPending);
+    on('tx.confirmed', handleTxConfirmed);
+
+    return () => {
+      off('tx.pending', handleTxPending);
+      off('tx.confirmed', handleTxConfirmed);
+    };
+  }, [on, off]);
+
+  // Listen for confirmation events
+  useEffect(() => {
+    const handleConfirmationRequired = (data: unknown) => {
+      const event = data as ConfirmationRequiredEvent;
+      console.log('[Confirmation] Required:', event.tool_name, event.description);
+
+      setPendingConfirmation({
+        confirmation_id: event.confirmation_id,
+        channel_id: event.channel_id,
+        tool_name: event.tool_name,
+        description: event.description,
+        parameters: event.parameters,
+        timestamp: event.timestamp,
+      });
+    };
+
+    const handleConfirmationApproved = () => {
+      console.log('[Confirmation] Approved');
+      setPendingConfirmation(null);
+    };
+
+    const handleConfirmationRejected = () => {
+      console.log('[Confirmation] Rejected');
+      setPendingConfirmation(null);
+    };
+
+    on('confirmation.required', handleConfirmationRequired);
+    on('confirmation.approved', handleConfirmationApproved);
+    on('confirmation.rejected', handleConfirmationRejected);
+
+    return () => {
+      off('confirmation.required', handleConfirmationRequired);
+      off('confirmation.approved', handleConfirmationApproved);
+      off('confirmation.rejected', handleConfirmationRejected);
+    };
+  }, [on, off]);
 
   const addMessage = useCallback((role: MessageRole, content: string) => {
     const message: ChatMessageType = {
@@ -444,6 +633,38 @@ export default function AgentChat() {
 
       {/* Execution Progress */}
       <ExecutionProgress className="mx-6 mb-4" />
+
+      {/* Transaction Tracker */}
+      <TransactionTracker transactions={trackedTxs} className="mx-6 mb-4" />
+
+      {/* Confirmation Prompt */}
+      {pendingConfirmation && (
+        <div className="mx-6 mb-4">
+          <ConfirmationPrompt
+            confirmation={pendingConfirmation}
+            onConfirm={async (confirmationId) => {
+              console.log('[Confirmation] Confirming:', confirmationId);
+              const result = await confirmTransaction(pendingConfirmation.channel_id);
+              if (result.success) {
+                addMessage('system', result.message || 'Transaction confirmed and executing.');
+                setPendingConfirmation(null);
+              } else {
+                throw new Error(result.error || 'Failed to confirm');
+              }
+            }}
+            onCancel={async (confirmationId) => {
+              console.log('[Confirmation] Cancelling:', confirmationId);
+              const result = await cancelTransaction(pendingConfirmation.channel_id);
+              if (result.success) {
+                addMessage('system', result.message || 'Transaction cancelled.');
+                setPendingConfirmation(null);
+              } else {
+                throw new Error(result.error || 'Failed to cancel');
+              }
+            }}
+          />
+        </div>
+      )}
 
       {/* Input */}
       <div className="px-6 pb-6">

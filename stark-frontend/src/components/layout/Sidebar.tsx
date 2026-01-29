@@ -3,16 +3,19 @@ import {
   MessageSquare,
   Monitor,
   Settings,
+  Bot,
   Wrench,
   Zap,
   Clock,
   Calendar,
-  FileText,
+  Brain,
   Users,
   ScrollText,
   Bug,
   LogOut,
   Key,
+  DollarSign,
+  Shield,
 } from 'lucide-react';
 import NavItem from './NavItem';
 import { useAuth } from '@/hooks/useAuth';
@@ -35,10 +38,13 @@ export default function Sidebar() {
           <NavItem to="/agent-chat" icon={MessageSquare} label="Agent Chat" />
           <NavItem to="/channels" icon={Monitor} label="Channels" />
           <NavItem to="/agent-settings" icon={Settings} label="Agent Settings" />
+          <NavItem to="/bot-settings" icon={Bot} label="Bot Settings" />
           <NavItem to="/tools" icon={Wrench} label="Tools" />
           <NavItem to="/skills" icon={Zap} label="Skills" />
           <NavItem to="/scheduling" icon={Clock} label="Scheduling" />
           <NavItem to="/api-keys" icon={Key} label="API Keys" />
+          <NavItem to="/payments" icon={DollarSign} label="Payments" />
+          <NavItem to="/eip8004" icon={Shield} label="EIP-8004" />
         </div>
 
         {/* Data Section */}
@@ -47,7 +53,7 @@ export default function Sidebar() {
             Data
           </p>
           <NavItem to="/sessions" icon={Calendar} label="Sessions" />
-          <NavItem to="/memories" icon={FileText} label="Memories" />
+          <NavItem to="/memories" icon={Brain} label="Memory Browser" />
           <NavItem to="/identities" icon={Users} label="Identities" />
         </div>
 

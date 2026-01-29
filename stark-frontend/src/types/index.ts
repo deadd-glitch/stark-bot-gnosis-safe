@@ -1,5 +1,5 @@
 // Message types
-export type MessageRole = 'user' | 'assistant' | 'system' | 'error' | 'command' | 'tool-indicator';
+export type MessageRole = 'user' | 'assistant' | 'system' | 'error' | 'command' | 'tool-indicator' | 'tool';
 
 export interface ChatMessage {
   id: string;
@@ -63,6 +63,67 @@ export interface X402PaymentEvent {
   asset: string;
   pay_to: string;
   resource?: string;
+  timestamp: string;
+}
+
+// Transaction events
+export interface TxPendingEvent {
+  channel_id: number;
+  tx_hash: string;
+  network: string;
+  explorer_url: string;
+  timestamp: string;
+}
+
+export interface TxConfirmedEvent {
+  channel_id: number;
+  tx_hash: string;
+  network: string;
+  status: 'confirmed' | 'reverted' | 'pending';
+  timestamp: string;
+}
+
+// Transaction tracker state
+export interface TrackedTransaction {
+  tx_hash: string;
+  network: string;
+  explorer_url: string;
+  status: 'pending' | 'confirmed' | 'reverted';
+  timestamp: Date;
+}
+
+// Confirmation events
+export interface ConfirmationRequiredEvent {
+  channel_id: number;
+  confirmation_id: string;
+  tool_name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  instructions: string;
+  timestamp: string;
+}
+
+export interface ConfirmationApprovedEvent {
+  channel_id: number;
+  confirmation_id: string;
+  tool_name: string;
+  timestamp: string;
+}
+
+export interface ConfirmationRejectedEvent {
+  channel_id: number;
+  confirmation_id: string;
+  tool_name: string;
+  timestamp: string;
+}
+
+// Pending confirmation state
+export interface PendingConfirmation {
+  confirmation_id: string;
+  channel_id: number;
+  tool_name: string;
+  description: string;
+  parameters: Record<string, unknown>;
   timestamp: string;
 }
 

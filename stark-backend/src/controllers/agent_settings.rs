@@ -234,6 +234,7 @@ pub async fn update_bot_settings(
     match state.db.update_bot_settings(
         request.bot_name.as_deref(),
         request.bot_email.as_deref(),
+        request.web3_tx_requires_confirmation,
     ) {
         Ok(settings) => {
             log::info!("Updated bot settings: name={}, email={}", settings.bot_name, settings.bot_email);

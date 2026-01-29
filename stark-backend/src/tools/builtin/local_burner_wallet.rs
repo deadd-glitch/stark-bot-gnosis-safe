@@ -2,18 +2,19 @@
 //!
 //! Provides access to the local burner wallet configured via BURNER_WALLET_BOT_PRIVATE_KEY.
 //! Supports getting address, checking balances, and signing messages.
+//! All RPC calls go through defirelay.com with x402 payments.
 
 use crate::tools::registry::Tool;
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
 };
+use crate::x402::{erc20, X402EvmRpc};
 use async_trait::async_trait;
 use ethers::prelude::*;
 use ethers::utils::format_units;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Local burner wallet tool
 pub struct LocalBurnerWalletTool {
@@ -89,20 +90,18 @@ impl LocalBurnerWalletTool {
 
     /// Get the wallet from environment
     fn get_wallet() -> Result<LocalWallet, String> {
-        let private_key = std::env::var("BURNER_WALLET_BOT_PRIVATE_KEY")
-            .map_err(|_| "BURNER_WALLET_BOT_PRIVATE_KEY not set")?;
+        let private_key = crate::config::burner_wallet_private_key()
+            .ok_or("BURNER_WALLET_BOT_PRIVATE_KEY not set")?;
 
         private_key
             .parse::<LocalWallet>()
             .map_err(|e| format!("Invalid private key: {}", e))
     }
 
-    /// Get RPC URL for network
-    fn get_rpc_url(network: &str) -> &'static str {
-        match network {
-            "mainnet" => "https://eth.llamarpc.com",
-            _ => "https://mainnet.base.org",
-        }
+    /// Get the private key from environment
+    fn get_private_key() -> Result<String, String> {
+        crate::config::burner_wallet_private_key()
+            .ok_or_else(|| "BURNER_WALLET_BOT_PRIVATE_KEY not set".to_string())
     }
 
     /// Get wallet address
@@ -111,18 +110,15 @@ impl LocalBurnerWalletTool {
         Ok(format!("{:?}", wallet.address()))
     }
 
-    /// Check ETH balance
+    /// Check ETH balance via x402 RPC
     async fn get_balance(network: &str) -> Result<(String, String), String> {
         let wallet = Self::get_wallet()?;
         let address = wallet.address();
+        let private_key = Self::get_private_key()?;
 
-        let provider = Provider::<Http>::try_from(Self::get_rpc_url(network))
-            .map_err(|e| format!("Failed to create provider: {}", e))?;
+        let rpc = X402EvmRpc::new(&private_key, network)?;
 
-        let balance = provider
-            .get_balance(address, None)
-            .await
-            .map_err(|e| format!("Failed to get balance: {}", e))?;
+        let balance = rpc.get_balance(address).await?;
 
         let formatted = format_units(balance, "ether")
             .map_err(|e| format!("Failed to format balance: {}", e))?;
@@ -130,41 +126,35 @@ impl LocalBurnerWalletTool {
         Ok((format!("{:?}", address), formatted))
     }
 
-    /// Check ERC20 token balance
+    /// Check ERC20 token balance via x402 RPC
     async fn get_token_balance(network: &str, token_address: &str) -> Result<(String, String, String), String> {
         let wallet = Self::get_wallet()?;
         let address = wallet.address();
+        let private_key = Self::get_private_key()?;
 
         let token: Address = token_address
             .parse()
             .map_err(|_| "Invalid token address")?;
 
-        let provider = Provider::<Http>::try_from(Self::get_rpc_url(network))
-            .map_err(|e| format!("Failed to create provider: {}", e))?;
+        let rpc = X402EvmRpc::new(&private_key, network)?;
 
-        // ERC20 balanceOf(address) call
-        abigen!(
-            IERC20,
-            r#"[
-                function balanceOf(address account) external view returns (uint256)
-                function decimals() external view returns (uint8)
-                function symbol() external view returns (string)
-            ]"#
-        );
+        // Get balance
+        let balance_data = erc20::encode_balance_of(address);
+        let balance_result = rpc.eth_call(token, &balance_data).await?;
+        let balance = erc20::decode_balance(&balance_result)
+            .map_err(|e| format!("Failed to decode balance: {}", e))?;
 
-        let contract = IERC20::new(token, Arc::new(provider));
+        // Get decimals (default to 18 if call fails)
+        let decimals = match rpc.eth_call(token, &erc20::encode_decimals()).await {
+            Ok(data) => erc20::decode_decimals(&data).unwrap_or(18),
+            Err(_) => 18,
+        };
 
-        let balance = contract
-            .balance_of(address)
-            .call()
-            .await
-            .map_err(|e| format!("Failed to get token balance: {}", e))?;
-
-        // Try to get decimals, default to 18
-        let decimals = contract.decimals().call().await.unwrap_or(18);
-
-        // Try to get symbol
-        let symbol = contract.symbol().call().await.unwrap_or_else(|_| "TOKEN".to_string());
+        // Get symbol (default to "TOKEN" if call fails)
+        let symbol = match rpc.eth_call(token, &erc20::encode_symbol()).await {
+            Ok(data) => erc20::decode_symbol(&data).unwrap_or_else(|_| "TOKEN".to_string()),
+            Err(_) => "TOKEN".to_string(),
+        };
 
         let formatted = format_units(balance, decimals as u32)
             .map_err(|e| format!("Failed to format balance: {}", e))?;

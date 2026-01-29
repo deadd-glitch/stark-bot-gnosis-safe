@@ -4,15 +4,158 @@ use serde::{Deserialize, Serialize};
 use crate::models::ApiKeyResponse;
 use crate::AppState;
 
+/// Enum of all valid API key identifiers
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiKeyId {
+    GithubToken,
+    BankrApiKey,
+    TwitterClientId,
+    TwitterClientSecret,
+}
+
+impl ApiKeyId {
+    /// The key name as stored in the database
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::GithubToken => "GITHUB_TOKEN",
+            Self::BankrApiKey => "BANKR_API_KEY",
+            Self::TwitterClientId => "TWITTER_CLIENT_ID",
+            Self::TwitterClientSecret => "TWITTER_CLIENT_SECRET",
+        }
+    }
+
+    /// Environment variable names to set when this key is available
+    /// Returns None if the key should not be exported to environment
+    pub fn env_vars(&self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::GithubToken => Some(&["GH_TOKEN", "GITHUB_TOKEN"]),
+            Self::BankrApiKey => Some(&["BANKR_API_KEY"]),
+            Self::TwitterClientId => Some(&["TWITTER_CLIENT_ID"]),
+            Self::TwitterClientSecret => Some(&["TWITTER_CLIENT_SECRET"]),
+        }
+    }
+
+    /// Whether this key requires special git configuration when set
+    pub fn requires_git_config(&self) -> bool {
+        matches!(self, Self::GithubToken)
+    }
+
+    /// All API key variants
+    pub fn all() -> &'static [ApiKeyId] {
+        &[
+            Self::GithubToken,
+            Self::BankrApiKey,
+            Self::TwitterClientId,
+            Self::TwitterClientSecret,
+        ]
+    }
+
+    /// Parse from string
+    pub fn from_str(s: &str) -> Option<ApiKeyId> {
+        match s {
+            "GITHUB_TOKEN" => Some(Self::GithubToken),
+            "BANKR_API_KEY" => Some(Self::BankrApiKey),
+            "TWITTER_CLIENT_ID" => Some(Self::TwitterClientId),
+            "TWITTER_CLIENT_SECRET" => Some(Self::TwitterClientSecret),
+            _ => None,
+        }
+    }
+}
+
+/// Configuration for a single key within a service group
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyConfig {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub secret: bool,
+}
+
+/// Configuration for a service group (e.g., "twitter" groups TWITTER_CLIENT_ID and TWITTER_CLIENT_SECRET)
+#[derive(Debug, Clone, Serialize)]
+pub struct ServiceConfig {
+    pub group: &'static str,
+    pub label: &'static str,
+    pub description: &'static str,
+    pub url: &'static str,
+    pub keys: Vec<KeyConfig>,
+}
+
+/// Get all service configurations
+pub fn get_service_configs() -> Vec<ServiceConfig> {
+    vec![
+        ServiceConfig {
+            group: "github",
+            label: "GitHub",
+            description: "Create a Personal Access Token with repo scope",
+            url: "https://github.com/settings/tokens",
+            keys: vec![KeyConfig {
+                name: "GITHUB_TOKEN",
+                label: "Personal Access Token",
+                secret: true,
+            }],
+        },
+        ServiceConfig {
+            group: "twitter",
+            label: "Twitter/X",
+            description: "Get OAuth 2.0 credentials from the Developer Portal",
+            url: "https://developer.x.com/en/portal/dashboard",
+            keys: vec![
+                KeyConfig {
+                    name: "TWITTER_CLIENT_ID",
+                    label: "Client ID",
+                    secret: false,
+                },
+                KeyConfig {
+                    name: "TWITTER_CLIENT_SECRET",
+                    label: "Client Secret",
+                    secret: true,
+                },
+            ],
+        },
+        ServiceConfig {
+            group: "bankr",
+            label: "Bankr",
+            description: "Generate an API key with Agent API access enabled",
+            url: "https://bankr.bot/api",
+            keys: vec![KeyConfig {
+                name: "BANKR_API_KEY",
+                label: "API Key",
+                secret: true,
+            }],
+        },
+    ]
+}
+
+/// Get all valid key names
+pub fn get_valid_key_names() -> Vec<&'static str> {
+    ApiKeyId::all().iter().map(|k| k.as_str()).collect()
+}
+
+/// Get key config by key name
+pub fn get_key_config(key_name: &str) -> Option<(&'static str, KeyConfig)> {
+    for config in get_service_configs() {
+        for key in &config.keys {
+            if key.name == key_name {
+                return Some((config.group, KeyConfig {
+                    name: key.name,
+                    label: key.label,
+                    secret: key.secret,
+                }));
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UpsertApiKeyRequest {
-    pub service_name: String,
+    pub key_name: String,
     pub api_key: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct DeleteApiKeyRequest {
-    pub service_name: String,
+    pub key_name: String,
 }
 
 #[derive(Serialize)]
@@ -33,13 +176,28 @@ pub struct ApiKeyOperationResponse {
     pub error: Option<String>,
 }
 
+/// Response for service configs endpoint
+#[derive(Serialize)]
+pub struct ServiceConfigsResponse {
+    pub success: bool,
+    pub configs: Vec<ServiceConfig>,
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/keys")
             .route("", web::get().to(list_api_keys))
             .route("", web::post().to(upsert_api_key))
-            .route("", web::delete().to(delete_api_key)),
+            .route("", web::delete().to(delete_api_key))
+            .route("/config", web::get().to(get_configs)),
     );
+}
+
+async fn get_configs() -> impl Responder {
+    HttpResponse::Ok().json(ServiceConfigsResponse {
+        success: true,
+        configs: get_service_configs(),
+    })
 }
 
 fn validate_session_from_request(
@@ -88,7 +246,10 @@ async fn list_api_keys(state: web::Data<AppState>, req: HttpRequest) -> impl Res
 
     match state.db.list_api_keys() {
         Ok(keys) => {
-            let key_responses: Vec<ApiKeyResponse> = keys.into_iter().map(|k| k.into()).collect();
+            let key_responses: Vec<ApiKeyResponse> = keys
+                .into_iter()
+                .map(|k| k.to_response())
+                .collect();
             HttpResponse::Ok().json(ApiKeysListResponse {
                 success: true,
                 keys: Some(key_responses),
@@ -115,20 +276,20 @@ async fn upsert_api_key(
         return resp;
     }
 
-    // Validate service name
-    let valid_services =  [ "github", "twitter", "bankr"];
-    if !valid_services.contains(&body.service_name.as_str()) {
+    // Validate key name
+    let valid_keys = get_valid_key_names();
+    if !valid_keys.contains(&body.key_name.as_str()) {
         return HttpResponse::BadRequest().json(ApiKeyOperationResponse {
             success: false,
             key: None,
             error: Some(format!(
-                "Invalid service name. Valid options: {}",
-                valid_services.join(", ")
+                "Invalid key name. Valid options: {}",
+                valid_keys.join(", ")
             )),
         });
     }
 
-    // Validate API key is not empty
+    // Validate api_key is not empty
     if body.api_key.trim().is_empty() {
         return HttpResponse::BadRequest().json(ApiKeyOperationResponse {
             success: false,
@@ -137,10 +298,11 @@ async fn upsert_api_key(
         });
     }
 
-    match state.db.upsert_api_key(&body.service_name, &body.api_key) {
+    // Store the key (key_name is the service_name in the database)
+    match state.db.upsert_api_key(&body.key_name, &body.api_key) {
         Ok(key) => HttpResponse::Ok().json(ApiKeyOperationResponse {
             success: true,
-            key: Some(key.into()),
+            key: Some(key.to_response()),
             error: None,
         }),
         Err(e) => {
@@ -163,7 +325,7 @@ async fn delete_api_key(
         return resp;
     }
 
-    match state.db.delete_api_key(&body.service_name) {
+    match state.db.delete_api_key(&body.key_name) {
         Ok(deleted) => {
             if deleted {
                 HttpResponse::Ok().json(ApiKeyOperationResponse {

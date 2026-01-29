@@ -1,3 +1,4 @@
+use crate::controllers::api_keys::ApiKeyId;
 use crate::tools::registry::Tool;
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
@@ -218,29 +219,35 @@ impl Tool for ExecTool {
             .stderr(Stdio::piped());
 
         // Set environment variables from context (API keys)
-        if let Some(github_token) = context.get_api_key("github") {
-            cmd.env("GH_TOKEN", &github_token);
-            cmd.env("GITHUB_TOKEN", &github_token);
-            // Disable git terminal prompts (would hang in non-interactive mode)
-            cmd.env("GIT_TERMINAL_PROMPT", "0");
-            // Configure git to rewrite github HTTPS URLs to include the token
-            // This allows git clone/push to authenticate automatically
-            cmd.env("GIT_CONFIG_COUNT", "2");
-            cmd.env("GIT_CONFIG_KEY_0", "url.https://x-access-token:".to_string() + &github_token + "@github.com/.insteadOf");
-            cmd.env("GIT_CONFIG_VALUE_0", "https://github.com/");
-            cmd.env("GIT_CONFIG_KEY_1", "url.https://x-access-token:".to_string() + &github_token + "@github.com/.insteadOf");
-            cmd.env("GIT_CONFIG_VALUE_1", "git@github.com:");
-            // Set git author/committer info for commits (from bot config)
-            let bot_name = context.get_bot_name();
-            let bot_email = context.get_bot_email();
-            cmd.env("GIT_AUTHOR_NAME", &bot_name);
-            cmd.env("GIT_AUTHOR_EMAIL", &bot_email);
-            cmd.env("GIT_COMMITTER_NAME", &bot_name);
-            cmd.env("GIT_COMMITTER_EMAIL", &bot_email);
-        }
+        for key_id in ApiKeyId::all() {
+            if let Some(value) = context.get_api_key(key_id.as_str()) {
+                // Set all configured env vars for this key
+                if let Some(env_vars) = key_id.env_vars() {
+                    for env_var in env_vars {
+                        cmd.env(*env_var, &value);
+                    }
+                }
 
-        if let Some(openai_key) = context.get_api_key("openai") {
-            cmd.env("OPENAI_API_KEY", &openai_key);
+                // Special git configuration for GitHub token
+                if key_id.requires_git_config() {
+                    // Disable git terminal prompts (would hang in non-interactive mode)
+                    cmd.env("GIT_TERMINAL_PROMPT", "0");
+                    // Configure git to rewrite github HTTPS URLs to include the token
+                    // This allows git clone/push to authenticate automatically
+                    cmd.env("GIT_CONFIG_COUNT", "2");
+                    cmd.env("GIT_CONFIG_KEY_0", format!("url.https://x-access-token:{}@github.com/.insteadOf", value));
+                    cmd.env("GIT_CONFIG_VALUE_0", "https://github.com/");
+                    cmd.env("GIT_CONFIG_KEY_1", format!("url.https://x-access-token:{}@github.com/.insteadOf", value));
+                    cmd.env("GIT_CONFIG_VALUE_1", "git@github.com:");
+                    // Set git author/committer info for commits (from bot config)
+                    let bot_name = context.get_bot_name();
+                    let bot_email = context.get_bot_email();
+                    cmd.env("GIT_AUTHOR_NAME", &bot_name);
+                    cmd.env("GIT_AUTHOR_EMAIL", &bot_email);
+                    cmd.env("GIT_COMMITTER_NAME", &bot_name);
+                    cmd.env("GIT_COMMITTER_EMAIL", &bot_email);
+                }
+            }
         }
 
         // Set custom environment variables from params

@@ -117,9 +117,9 @@ impl X402RpcTool {
             }
         }
 
-        // Get private key from environment
-        let private_key = std::env::var("BURNER_WALLET_BOT_PRIVATE_KEY")
-            .map_err(|_| "BURNER_WALLET_BOT_PRIVATE_KEY environment variable not set")?;
+        // Get private key from config
+        let private_key = crate::config::burner_wallet_private_key()
+            .ok_or("BURNER_WALLET_BOT_PRIVATE_KEY environment variable not set")?;
 
         X402Client::new(&private_key)
     }

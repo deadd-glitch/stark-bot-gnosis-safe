@@ -18,6 +18,7 @@ use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::AgentSettings;
 use crate::tools::ToolDefinition;
+use crate::x402::X402PaymentInfo;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -98,17 +99,18 @@ impl AiClient {
     }
 
     /// Generate text and emit x402 payment event if applicable
+    /// Returns (content, optional payment info) so caller can persist the payment
     pub async fn generate_text_with_events(
         &self,
         messages: Vec<Message>,
         broadcaster: &Arc<EventBroadcaster>,
         channel_id: i64,
-    ) -> Result<String, String> {
+    ) -> Result<(String, Option<X402PaymentInfo>), String> {
         match self {
             AiClient::OpenAI(client) => {
                 let (content, payment) = client.generate_text_with_payment_info(messages).await?;
                 // Emit x402 payment event if payment was made
-                if let Some(payment_info) = payment {
+                if let Some(ref payment_info) = payment {
                     broadcaster.broadcast(GatewayEvent::x402_payment(
                         channel_id,
                         &payment_info.amount,
@@ -118,11 +120,11 @@ impl AiClient {
                         payment_info.resource.as_deref(),
                     ));
                 }
-                Ok(content)
+                Ok((content, payment))
             }
             // Other providers don't support x402
-            AiClient::Claude(client) => client.generate_text(messages).await,
-            AiClient::Llama(client) => client.generate_text(messages).await,
+            AiClient::Claude(client) => Ok((client.generate_text(messages).await?, None)),
+            AiClient::Llama(client) => Ok((client.generate_text(messages).await?, None)),
         }
     }
 

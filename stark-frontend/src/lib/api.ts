@@ -192,6 +192,13 @@ export async function deleteSkill(id: string): Promise<void> {
   await apiFetch(`/skills/${id}`, { method: 'DELETE' });
 }
 
+export async function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
+  await apiFetch(`/skills/${encodeURIComponent(name)}/enabled`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  });
+}
+
 // Sessions API
 export async function getSessions(): Promise<Array<{
   id: number;
@@ -208,18 +215,141 @@ export async function deleteSession(id: string): Promise<void> {
   await apiFetch(`/sessions/${id}`, { method: 'DELETE' });
 }
 
-// Memories API
-export async function getMemories(): Promise<Array<{
+// Memories API - Enhanced (Phase 5)
+export interface MemoryInfo {
   id: number;
+  memory_type: string;
   content: string;
-  importance?: number;
+  category?: string;
+  tags?: string;
+  importance: number;
+  identity_id?: string;
+  source_channel_type?: string;
+  log_date?: string;
   created_at: string;
-}>> {
+  updated_at: string;
+  // Phase 2: Enhanced fields
+  entity_type?: string;
+  entity_name?: string;
+  confidence?: number;
+  source_type?: string;
+  last_referenced_at?: string;
+  // Phase 4: Consolidation
+  superseded_by?: number;
+  // Phase 7: Temporal
+  valid_from?: string;
+  valid_until?: string;
+  temporal_type?: string;
+}
+
+export interface MemoryStats {
+  total_count: number;
+  by_type: Record<string, number>;
+  by_identity: Record<string, number>;
+  avg_importance: number;
+  oldest_memory_at?: string;
+  newest_memory_at?: string;
+  superseded_count: number;
+  temporal_active_count: number;
+}
+
+export interface ListMemoriesParams {
+  memory_type?: string;
+  identity_id?: string;
+  min_importance?: number;
+  include_superseded?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export async function getMemories(): Promise<MemoryInfo[]> {
   return apiFetch('/memories');
+}
+
+export async function getMemoriesFiltered(params: ListMemoriesParams = {}): Promise<MemoryInfo[]> {
+  const queryParams = new URLSearchParams();
+  if (params.memory_type) queryParams.set('memory_type', params.memory_type);
+  if (params.identity_id) queryParams.set('identity_id', params.identity_id);
+  if (params.min_importance !== undefined) queryParams.set('min_importance', String(params.min_importance));
+  if (params.include_superseded) queryParams.set('include_superseded', 'true');
+  if (params.limit) queryParams.set('limit', String(params.limit));
+  if (params.offset) queryParams.set('offset', String(params.offset));
+
+  const query = queryParams.toString();
+  return apiFetch(`/memories/filtered${query ? `?${query}` : ''}`);
+}
+
+export async function getMemory(id: number): Promise<MemoryInfo> {
+  return apiFetch(`/memories/${id}`);
+}
+
+export async function updateMemory(id: number, data: {
+  content?: string;
+  category?: string;
+  tags?: string;
+  importance?: number;
+  entity_type?: string;
+  entity_name?: string;
+  valid_from?: string;
+  valid_until?: string;
+  temporal_type?: string;
+}): Promise<MemoryInfo> {
+  return apiFetch(`/memories/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
 }
 
 export async function deleteMemory(id: string): Promise<void> {
   await apiFetch(`/memories/${id}`, { method: 'DELETE' });
+}
+
+export async function mergeMemories(memoryIds: number[], mergedContent: string): Promise<{
+  success: boolean;
+  merged_memory: MemoryInfo;
+  superseded_count: number;
+}> {
+  return apiFetch('/memories/merge', {
+    method: 'POST',
+    body: JSON.stringify({
+      memory_ids: memoryIds,
+      merged_content: mergedContent,
+      use_max_importance: true,
+    }),
+  });
+}
+
+export async function getMemoryStats(): Promise<MemoryStats> {
+  return apiFetch('/memories/stats');
+}
+
+export async function exportMemories(identityId?: string): Promise<string> {
+  const query = identityId ? `?identity_id=${encodeURIComponent(identityId)}` : '';
+  const response = await fetch(`/api/memories/export${query}`, {
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem('stark_token')}`,
+    },
+  });
+  if (!response.ok) {
+    throw new Error('Failed to export memories');
+  }
+  return response.text();
+}
+
+export async function searchMemories(query: string, params: {
+  memory_type?: string;
+  identity_id?: string;
+  min_importance?: number;
+  limit?: number;
+} = {}): Promise<Array<{ memory: MemoryInfo; rank: number }>> {
+  return apiFetch('/memories/search', {
+    method: 'POST',
+    body: JSON.stringify({
+      query,
+      ...params,
+      limit: params.limit || 20,
+    }),
+  });
 }
 
 // Identities API
@@ -341,9 +471,30 @@ export async function getLogs(limit?: number): Promise<Array<{
 }
 
 // API Keys API
+export interface KeyConfig {
+  name: string;
+  label: string;
+  secret: boolean;
+}
+
+export interface ServiceConfig {
+  group: string;
+  label: string;
+  description: string;
+  url: string;
+  keys: KeyConfig[];
+}
+
+export interface ServiceConfigsResponse {
+  success: boolean;
+  configs: ServiceConfig[];
+}
+
 export interface ApiKey {
-  service_name: string;
+  id: number;
+  key_name: string;
   key_preview: string;
+  is_secret: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -354,22 +505,27 @@ export interface ApiKeysResponse {
   error?: string;
 }
 
+export async function getServiceConfigs(): Promise<ServiceConfig[]> {
+  const response = await apiFetch<ServiceConfigsResponse>('/keys/config');
+  return response.configs || [];
+}
+
 export async function getApiKeys(): Promise<ApiKey[]> {
   const response = await apiFetch<ApiKeysResponse>('/keys');
   return response.keys || [];
 }
 
-export async function upsertApiKey(serviceName: string, apiKey: string): Promise<void> {
+export async function upsertApiKey(keyName: string, apiKey: string): Promise<void> {
   await apiFetch('/keys', {
     method: 'POST',
-    body: JSON.stringify({ service_name: serviceName, api_key: apiKey }),
+    body: JSON.stringify({ key_name: keyName, api_key: apiKey }),
   });
 }
 
-export async function deleteApiKey(serviceName: string): Promise<void> {
+export async function deleteApiKey(keyName: string): Promise<void> {
   await apiFetch('/keys', {
     method: 'DELETE',
-    body: JSON.stringify({ service_name: serviceName }),
+    body: JSON.stringify({ key_name: keyName }),
   });
 }
 
@@ -569,4 +725,66 @@ export async function updateHeartbeatConfig(data: {
     throw new Error(response.error || 'Failed to update heartbeat config');
   }
   return response.config;
+}
+
+// Bot Settings API
+export interface BotSettings {
+  id: number;
+  bot_name: string;
+  bot_email: string;
+  web3_tx_requires_confirmation: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getBotSettings(): Promise<BotSettings> {
+  return apiFetch('/bot-settings');
+}
+
+export async function updateBotSettings(data: {
+  bot_name?: string;
+  bot_email?: string;
+  web3_tx_requires_confirmation?: boolean;
+}): Promise<BotSettings> {
+  return apiFetch('/bot-settings', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+// Confirmation API
+export interface ConfirmationResponse {
+  success: boolean;
+  message?: string;
+  error?: string;
+  result?: string;
+}
+
+export interface PendingConfirmationResponse {
+  has_pending: boolean;
+  confirmation?: {
+    id: string;
+    channel_id: number;
+    tool_name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+export async function getPendingConfirmation(channelId: number): Promise<PendingConfirmationResponse> {
+  return apiFetch(`/confirmation/pending/${channelId}`);
+}
+
+export async function confirmTransaction(channelId: number): Promise<ConfirmationResponse> {
+  return apiFetch('/confirmation/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ channel_id: channelId }),
+  });
+}
+
+export async function cancelTransaction(channelId: number): Promise<ConfirmationResponse> {
+  return apiFetch('/confirmation/cancel', {
+    method: 'POST',
+    body: JSON.stringify({ channel_id: channelId }),
+  });
 }

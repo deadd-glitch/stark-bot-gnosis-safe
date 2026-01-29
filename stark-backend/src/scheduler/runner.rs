@@ -26,8 +26,8 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         SchedulerConfig {
             cron_enabled: true,
-            heartbeat_enabled: true,
-            poll_interval_secs: 10,
+            heartbeat_enabled: false,  // Disabled - too noisy
+            poll_interval_secs: 60,    // Check once per minute instead of 10 seconds
             max_concurrent_jobs: 5,
         }
     }

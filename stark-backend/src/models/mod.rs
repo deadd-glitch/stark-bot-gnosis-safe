@@ -23,8 +23,8 @@ pub use identity::{
     LinkedAccountInfo,
 };
 pub use memory::{
-    CreateMemoryRequest, Memory, MemoryResponse, MemorySearchResult, MemoryType,
-    SearchMemoriesRequest,
+    CreateMemoryRequest, Memory, MemoryResponse, MemorySearchResult, MemoryStats, MemoryType,
+    MergeMemoriesRequest, SearchMemoriesRequest, UpdateMemoryRequest,
 };
 pub use session::Session;
 pub use session_message::{AddMessageRequest, MessageRole, SessionMessage, SessionTranscriptResponse};

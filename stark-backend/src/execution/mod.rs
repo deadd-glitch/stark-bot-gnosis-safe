@@ -5,5 +5,7 @@
 //! display of execution progress (similar to Claude Code's CLI display).
 
 mod tracker;
+mod pending_confirmation;
 
 pub use tracker::ExecutionTracker;
+pub use pending_confirmation::{PendingConfirmation, PendingConfirmationManager};

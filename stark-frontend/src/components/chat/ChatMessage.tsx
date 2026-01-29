@@ -58,6 +58,7 @@ export default function ChatMessage({ role, content, timestamp }: ChatMessagePro
     error: 'bg-red-500/20 text-red-400 border border-red-500/50',
     command: 'bg-slate-700 text-stark-400',
     'tool-indicator': 'bg-amber-500/20 text-amber-400 border border-amber-500/50',
+    tool: 'bg-purple-500/20 text-purple-300 border border-purple-500/50',
   };
 
   if (isToolIndicator) {
@@ -90,7 +91,7 @@ export default function ChatMessage({ role, content, timestamp }: ChatMessagePro
           isUser ? 'rounded-br-md' : 'rounded-bl-md'
         )}
       >
-        {role === 'assistant' || role === 'system' ? (
+        {role === 'assistant' || role === 'system' || role === 'tool' ? (
           <div
             className="prose prose-sm prose-invert max-w-none leading-relaxed"
             dangerouslySetInnerHTML={{ __html: parseMarkdown(content) }}

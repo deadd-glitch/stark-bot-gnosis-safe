@@ -491,4 +491,29 @@ impl Database {
 
         Ok(content)
     }
+
+    /// Update the last_flush_at timestamp for a session (Phase 1: pre-compaction flush)
+    pub fn update_session_last_flush(&self, session_id: i64) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE chat_sessions SET last_flush_at = ?1, updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![&now, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get the last flush timestamp for a session
+    pub fn get_session_last_flush(&self, session_id: i64) -> SqliteResult<Option<chrono::DateTime<Utc>>> {
+        let conn = self.conn.lock().unwrap();
+        let flush_str: Option<String> = conn.query_row(
+            "SELECT last_flush_at FROM chat_sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        ).ok().flatten();
+
+        Ok(flush_str.and_then(|s| {
+            chrono::DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))
+        }))
+    }
 }

@@ -12,16 +12,18 @@ impl Database {
         let conn = self.conn.lock().unwrap();
 
         let result = conn.query_row(
-            "SELECT id, bot_name, bot_email, created_at, updated_at FROM bot_settings LIMIT 1",
+            "SELECT id, bot_name, bot_email, web3_tx_requires_confirmation, created_at, updated_at FROM bot_settings LIMIT 1",
             [],
             |row| {
-                let created_at_str: String = row.get(3)?;
-                let updated_at_str: String = row.get(4)?;
+                let web3_tx_confirmation: i64 = row.get(3)?;
+                let created_at_str: String = row.get(4)?;
+                let updated_at_str: String = row.get(5)?;
 
                 Ok(BotSettings {
                     id: row.get(0)?,
                     bot_name: row.get(1)?,
                     bot_email: row.get(2)?,
+                    web3_tx_requires_confirmation: web3_tx_confirmation != 0,
                     created_at: DateTime::parse_from_rfc3339(&created_at_str)
                         .unwrap()
                         .with_timezone(&Utc),
@@ -43,6 +45,7 @@ impl Database {
         &self,
         bot_name: Option<&str>,
         bot_email: Option<&str>,
+        web3_tx_requires_confirmation: Option<bool>,
     ) -> SqliteResult<BotSettings> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
@@ -69,13 +72,20 @@ impl Database {
                     [email, &now],
                 )?;
             }
+            if let Some(requires_confirmation) = web3_tx_requires_confirmation {
+                conn.execute(
+                    "UPDATE bot_settings SET web3_tx_requires_confirmation = ?1, updated_at = ?2",
+                    rusqlite::params![if requires_confirmation { 1 } else { 0 }, &now],
+                )?;
+            }
         } else {
             // Insert new
             let name = bot_name.unwrap_or("StarkBot");
             let email = bot_email.unwrap_or("starkbot@users.noreply.github.com");
+            let confirmation = web3_tx_requires_confirmation.unwrap_or(false);
             conn.execute(
-                "INSERT INTO bot_settings (bot_name, bot_email, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-                [name, email, &now, &now],
+                "INSERT INTO bot_settings (bot_name, bot_email, web3_tx_requires_confirmation, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![name, email, if confirmation { 1 } else { 0 }, &now, &now],
             )?;
         }
 

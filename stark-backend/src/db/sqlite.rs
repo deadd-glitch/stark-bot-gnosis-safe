@@ -124,6 +124,7 @@ impl Database {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 bot_name TEXT NOT NULL DEFAULT 'StarkBot',
                 bot_email TEXT NOT NULL DEFAULT 'starkbot@users.noreply.github.com',
+                web3_tx_requires_confirmation INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )",
@@ -156,6 +157,20 @@ impl Database {
 
         if !has_max_tokens {
             conn.execute("ALTER TABLE agent_settings ADD COLUMN max_tokens INTEGER DEFAULT 40000", [])?;
+        }
+
+        // Migration: Add web3_tx_requires_confirmation column to bot_settings if it doesn't exist
+        let has_web3_tx_confirmation: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('bot_settings') WHERE name='web3_tx_requires_confirmation'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_web3_tx_confirmation {
+            conn.execute("ALTER TABLE bot_settings ADD COLUMN web3_tx_requires_confirmation INTEGER NOT NULL DEFAULT 1", [])?;
         }
 
         // Initialize bot_settings with defaults if empty
@@ -200,6 +215,8 @@ impl Database {
         let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN max_context_tokens INTEGER NOT NULL DEFAULT 100000", []);
         let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN compaction_id INTEGER", []);
+        // Phase 1: Add last_flush_at for pre-compaction memory flush tracking
+        let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN last_flush_at TEXT", []);
 
         // Session messages table - conversation transcripts
         conn.execute(
@@ -235,7 +252,7 @@ impl Database {
             [],
         )?;
 
-        // Memories table - daily logs and long-term memories
+        // Memories table - daily logs, long-term memories, preferences, facts, entities, tasks
         conn.execute(
             "CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -252,10 +269,36 @@ impl Database {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 expires_at TEXT,
-                FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE SET NULL
+                -- Phase 2: Enhanced memory fields
+                entity_type TEXT,
+                entity_name TEXT,
+                confidence REAL DEFAULT 1.0,
+                source_type TEXT DEFAULT 'inferred',
+                last_referenced_at TEXT,
+                -- Phase 4: Consolidation fields
+                superseded_by INTEGER,
+                superseded_at TEXT,
+                -- Phase 7: Temporal reasoning fields
+                valid_from TEXT,
+                valid_until TEXT,
+                temporal_type TEXT,
+                FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE SET NULL,
+                FOREIGN KEY (superseded_by) REFERENCES memories(id) ON DELETE SET NULL
             )",
             [],
         )?;
+
+        // Migration: Add new memory columns if they don't exist
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN entity_type TEXT", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN entity_name TEXT", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN confidence REAL DEFAULT 1.0", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN source_type TEXT DEFAULT 'inferred'", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN last_referenced_at TEXT", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN superseded_by INTEGER", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN superseded_at TEXT", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN valid_from TEXT", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN valid_until TEXT", []);
+        let _ = conn.execute("ALTER TABLE memories ADD COLUMN temporal_type TEXT", []);
 
         // FTS5 virtual table for full-text search on memories
         conn.execute(
@@ -266,6 +309,37 @@ impl Database {
                 content=memories,
                 content_rowid=id
             )",
+            [],
+        )?;
+
+        // Memory embeddings table for vector search (Phase 3)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS memory_embeddings (
+                memory_id INTEGER PRIMARY KEY,
+                embedding BLOB NOT NULL,
+                model TEXT NOT NULL,
+                dimensions INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // Create index for entity lookups (Phase 2)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_entity ON memories(entity_type, entity_name)",
+            [],
+        )?;
+
+        // Create index for temporal queries (Phase 7)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_temporal ON memories(valid_from, valid_until)",
+            [],
+        )?;
+
+        // Create index for superseded lookups (Phase 4)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_superseded ON memories(superseded_by)",
             [],
         )?;
 
@@ -488,26 +562,181 @@ impl Database {
             [],
         )?;
 
-            //this is an anti pattern ! 
-        // Seed default Kimi agent if no agents exist
-       /* let agent_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM agent_settings",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        // =====================================================
+        // EIP-8004 Tables (Trustless Agents)
+        // =====================================================
 
-        if agent_count == 0 {
-            let now = chrono::Utc::now().to_rfc3339();
-            conn.execute(
-                "INSERT INTO agent_settings (provider, endpoint, api_key, model, model_archetype, max_tokens, enabled, created_at, updated_at)
-                 VALUES ('kimi', 'https://kimi.defirelay.com/api/v1/chat/completions', '', 'default', 'kimi', 40000, 1, ?1, ?2)",
-                [&now, &now],
-            )?;
-            log::info!("Seeded default Kimi agent");
-        }*/
+        // x402 payment history with proof tracking
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS x402_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER,
+                session_id INTEGER,
+                execution_id TEXT,
+                tool_name TEXT,
+                resource TEXT,
+                amount TEXT NOT NULL,
+                amount_formatted TEXT,
+                asset TEXT NOT NULL DEFAULT 'USDC',
+                pay_to TEXT NOT NULL,
+                from_address TEXT,
+                tx_hash TEXT,
+                block_number INTEGER,
+                feedback_submitted INTEGER NOT NULL DEFAULT 0,
+                feedback_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE SET NULL
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_x402_payments_channel ON x402_payments(channel_id)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_x402_payments_tx_hash ON x402_payments(tx_hash)",
+            [],
+        )?;
+
+        // Agent identity (our EIP-8004 registration)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_identity (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                agent_registry TEXT NOT NULL,
+                chain_id INTEGER NOT NULL DEFAULT 8453,
+                registration_uri TEXT,
+                registration_hash TEXT,
+                wallet_address TEXT NOT NULL,
+                owner_address TEXT,
+                name TEXT,
+                description TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                tx_hash TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            [],
+        )?;
+
+        // Reputation feedback (given and received)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS reputation_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                direction TEXT NOT NULL CHECK (direction IN ('given', 'received')),
+                agent_id INTEGER NOT NULL,
+                agent_registry TEXT NOT NULL,
+                client_address TEXT NOT NULL,
+                feedback_index INTEGER,
+                value INTEGER NOT NULL,
+                value_decimals INTEGER NOT NULL DEFAULT 0,
+                tag1 TEXT,
+                tag2 TEXT,
+                endpoint TEXT,
+                feedback_uri TEXT,
+                feedback_hash TEXT,
+                proof_of_payment_tx TEXT,
+                response_uri TEXT,
+                response_hash TEXT,
+                is_revoked INTEGER NOT NULL DEFAULT 0,
+                tx_hash TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reputation_direction ON reputation_feedback(direction)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reputation_agent ON reputation_feedback(agent_id, agent_registry)",
+            [],
+        )?;
+
+        // Known agents (discovered from registry)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS known_agents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                agent_registry TEXT NOT NULL,
+                chain_id INTEGER NOT NULL DEFAULT 8453,
+                name TEXT,
+                description TEXT,
+                image_url TEXT,
+                registration_uri TEXT,
+                owner_address TEXT,
+                wallet_address TEXT,
+                x402_support INTEGER NOT NULL DEFAULT 0,
+                services TEXT,
+                supported_trust TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                reputation_score INTEGER,
+                reputation_count INTEGER NOT NULL DEFAULT 0,
+                total_payments TEXT,
+                last_interaction_at TEXT,
+                discovered_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(agent_id, agent_registry)
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_known_agents_x402 ON known_agents(x402_support, is_active)",
+            [],
+        )?;
+
+        // Validation records
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS validations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                direction TEXT NOT NULL CHECK (direction IN ('requested', 'responded')),
+                request_hash TEXT NOT NULL,
+                agent_id INTEGER NOT NULL,
+                agent_registry TEXT,
+                validator_address TEXT,
+                request_uri TEXT,
+                response INTEGER CHECK (response >= 0 AND response <= 100),
+                response_uri TEXT,
+                response_hash TEXT,
+                tag TEXT,
+                tx_hash TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_validations_request_hash ON validations(request_hash)",
+            [],
+        )?;
 
         Ok(())
+    }
+
+    /// Record an x402 payment to the database
+    pub fn record_x402_payment(
+        &self,
+        channel_id: Option<i64>,
+        tool_name: Option<&str>,
+        resource: Option<&str>,
+        amount: &str,
+        amount_formatted: &str,
+        asset: &str,
+        pay_to: &str,
+    ) -> Result<i64, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO x402_payments (channel_id, tool_name, resource, amount, amount_formatted, asset, pay_to)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![channel_id, tool_name, resource, amount, amount_formatted, asset, pay_to],
+        )?;
+        Ok(conn.last_insert_rowid())
     }
 }

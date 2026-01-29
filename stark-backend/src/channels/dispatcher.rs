@@ -3,6 +3,7 @@ use crate::ai::{
     ThinkingLevel, ToolCall, ToolHistoryEntry, ToolResponse,
 };
 use crate::channels::types::{DispatchResult, NormalizedMessage};
+use crate::config::MemoryConfig;
 use crate::context::{self, estimate_tokens, ContextManager};
 use crate::db::Database;
 use crate::execution::ExecutionTracker;
@@ -17,7 +18,84 @@ use serde_json::Value;
 use std::sync::Arc;
 
 /// Maximum number of tool execution iterations
-const MAX_TOOL_ITERATIONS: usize = 10;
+/// Set to 25 to allow for async jobs that require polling (e.g., Bankr API)
+const MAX_TOOL_ITERATIONS: usize = 25;
+
+/// Configuration for a memory marker pattern
+struct MemoryMarkerConfig {
+    pattern: Regex,
+    memory_type: MemoryType,
+    importance: i32,
+    name: &'static str,
+    use_today_date: bool,
+}
+
+impl MemoryMarkerConfig {
+    fn new(
+        pattern: &str,
+        memory_type: MemoryType,
+        importance: i32,
+        name: &'static str,
+        use_today_date: bool,
+    ) -> Self {
+        Self {
+            pattern: Regex::new(pattern).unwrap(),
+            memory_type,
+            importance,
+            name,
+            use_today_date,
+        }
+    }
+}
+
+/// Create all memory marker configurations
+fn create_memory_markers() -> Vec<MemoryMarkerConfig> {
+    vec![
+        MemoryMarkerConfig::new(
+            r"\[DAILY_LOG:\s*(.+?)\]",
+            MemoryType::DailyLog,
+            5,
+            "daily log",
+            true,
+        ),
+        MemoryMarkerConfig::new(
+            r"\[REMEMBER:\s*(.+?)\]",
+            MemoryType::LongTerm,
+            7,
+            "long-term memory",
+            false,
+        ),
+        MemoryMarkerConfig::new(
+            r"\[REMEMBER_IMPORTANT:\s*(.+?)\]",
+            MemoryType::LongTerm,
+            9,
+            "important memory",
+            false,
+        ),
+        // Phase 2: New memory types
+        MemoryMarkerConfig::new(
+            r"\[PREFERENCE:\s*(.+?)\]",
+            MemoryType::Preference,
+            7,
+            "user preference",
+            false,
+        ),
+        MemoryMarkerConfig::new(
+            r"\[FACT:\s*(.+?)\]",
+            MemoryType::Fact,
+            7,
+            "user fact",
+            false,
+        ),
+        MemoryMarkerConfig::new(
+            r"\[TASK:\s*(.+?)\]",
+            MemoryType::Task,
+            8,
+            "task/commitment",
+            true, // Use today's date for tasks
+        ),
+    ]
+}
 
 /// Dispatcher routes messages to the AI and returns responses
 pub struct MessageDispatcher {
@@ -28,12 +106,12 @@ pub struct MessageDispatcher {
     burner_wallet_private_key: Option<String>,
     context_manager: ContextManager,
     archetype_registry: ArchetypeRegistry,
-    // Regex patterns for memory markers
-    daily_log_pattern: Regex,
-    remember_pattern: Regex,
-    remember_important_pattern: Regex,
-    // Regex patterns for thinking directives
+    /// Memory marker configurations
+    memory_markers: Vec<MemoryMarkerConfig>,
+    /// Regex pattern for thinking directives
     thinking_directive_pattern: Regex,
+    /// Memory configuration for cross-session and other features
+    memory_config: MemoryConfig,
 }
 
 impl MessageDispatcher {
@@ -53,7 +131,9 @@ impl MessageDispatcher {
         execution_tracker: Arc<ExecutionTracker>,
         burner_wallet_private_key: Option<String>,
     ) -> Self {
-        let context_manager = ContextManager::new(db.clone());
+        let memory_config = MemoryConfig::from_env();
+        let context_manager = ContextManager::new(db.clone())
+            .with_memory_config(memory_config.clone());
         Self {
             db,
             broadcaster,
@@ -62,10 +142,9 @@ impl MessageDispatcher {
             burner_wallet_private_key,
             context_manager,
             archetype_registry: ArchetypeRegistry::new(),
-            daily_log_pattern: Regex::new(r"\[DAILY_LOG:\s*(.+?)\]").unwrap(),
-            remember_pattern: Regex::new(r"\[REMEMBER:\s*(.+?)\]").unwrap(),
-            remember_important_pattern: Regex::new(r"\[REMEMBER_IMPORTANT:\s*(.+?)\]").unwrap(),
+            memory_markers: create_memory_markers(),
             thinking_directive_pattern: Regex::new(r"(?i)^/(?:t|think|thinking)(?::(\w+))?$").unwrap(),
+            memory_config,
         }
     }
 
@@ -73,7 +152,9 @@ impl MessageDispatcher {
     pub fn new_without_tools(db: Arc<Database>, broadcaster: Arc<EventBroadcaster>) -> Self {
         // Create a minimal execution tracker for legacy use
         let execution_tracker = Arc::new(ExecutionTracker::new(broadcaster.clone()));
-        let context_manager = ContextManager::new(db.clone());
+        let memory_config = MemoryConfig::from_env();
+        let context_manager = ContextManager::new(db.clone())
+            .with_memory_config(memory_config.clone());
         Self {
             db: db.clone(),
             broadcaster,
@@ -82,10 +163,9 @@ impl MessageDispatcher {
             burner_wallet_private_key: None,
             context_manager,
             archetype_registry: ArchetypeRegistry::new(),
-            daily_log_pattern: Regex::new(r"\[DAILY_LOG:\s*(.+?)\]").unwrap(),
-            remember_pattern: Regex::new(r"\[REMEMBER:\s*(.+?)\]").unwrap(),
-            remember_important_pattern: Regex::new(r"\[REMEMBER_IMPORTANT:\s*(.+?)\]").unwrap(),
+            memory_markers: create_memory_markers(),
             thinking_directive_pattern: Regex::new(r"(?i)^/(?:t|think|thinking)(?::(\w+))?$").unwrap(),
+            memory_config,
         }
     }
 
@@ -299,21 +379,22 @@ impl MessageDispatcher {
         );
 
         // Build tool context with API keys from database
-        let workspace_dir = std::env::var("STARK_WORKSPACE_DIR")
-            .unwrap_or_else(|_| "./workspace".to_string());
+        let workspace_dir = crate::config::workspace_dir();
 
         let mut tool_context = ToolContext::new()
             .with_channel(message.channel_id, message.channel_type.clone())
             .with_user(message.user_id.clone())
-            .with_workspace(workspace_dir.clone());
+            .with_workspace(workspace_dir.clone())
+            .with_broadcaster(self.broadcaster.clone());
 
         // Ensure workspace directory exists
         let _ = std::fs::create_dir_all(&workspace_dir);
 
         // Load API keys from database for tools that need them
+        // Each key is stored individually (e.g., "GITHUB_TOKEN", "TWITTER_CLIENT_ID")
         if let Ok(keys) = self.db.list_api_keys() {
             for key in keys {
-                tool_context = tool_context.with_api_key(&key.service_name, key.api_key);
+                tool_context = tool_context.with_api_key(&key.service_name, key.api_key.clone());
             }
         }
 
@@ -336,7 +417,26 @@ impl MessageDispatcher {
             ).await
         } else {
             // Simple generation without tools - with x402 event emission
-            client.generate_text_with_events(messages, &self.broadcaster, message.channel_id).await
+            match client.generate_text_with_events(messages, &self.broadcaster, message.channel_id).await {
+                Ok((content, payment)) => {
+                    // Save x402 payment if one was made
+                    if let Some(ref payment_info) = payment {
+                        if let Err(e) = self.db.record_x402_payment(
+                            Some(message.channel_id),
+                            None,
+                            payment_info.resource.as_deref(),
+                            &payment_info.amount,
+                            &payment_info.amount_formatted,
+                            &payment_info.asset,
+                            &payment_info.pay_to,
+                        ) {
+                            log::error!("[DISPATCH] Failed to record x402 payment: {}", e);
+                        }
+                    }
+                    Ok(content)
+                }
+                Err(e) => Err(e),
+            }
         };
 
         match final_response {
@@ -443,7 +543,22 @@ impl MessageDispatcher {
 
         if tools.is_empty() {
             log::warn!("[TOOL_LOOP] No tools available, falling back to text-only generation");
-            return client.generate_text_with_events(messages, &self.broadcaster, original_message.channel_id).await;
+            let (content, payment) = client.generate_text_with_events(messages, &self.broadcaster, original_message.channel_id).await?;
+            // Save x402 payment if one was made
+            if let Some(ref payment_info) = payment {
+                if let Err(e) = self.db.record_x402_payment(
+                    Some(original_message.channel_id),
+                    None,
+                    payment_info.resource.as_deref(),
+                    &payment_info.amount,
+                    &payment_info.amount_formatted,
+                    &payment_info.asset,
+                    &payment_info.pay_to,
+                ) {
+                    log::error!("[TOOL_LOOP] Failed to record x402 payment: {}", e);
+                }
+            }
+            return Ok(content);
         }
 
         // Get the archetype for this request
@@ -542,6 +657,8 @@ impl MessageDispatcher {
 
         let mut tool_history: Vec<ToolHistoryEntry> = Vec::new();
         let mut iterations = 0;
+        // Track tool calls to include in the response
+        let mut tool_call_log: Vec<String> = Vec::new();
 
         loop {
             iterations += 1;
@@ -566,7 +683,7 @@ impl MessageDispatcher {
                 ai_response.stop_reason
             );
 
-            // Emit x402 payment event if payment was made
+            // Emit x402 payment event and save to database if payment was made
             if let Some(ref payment_info) = ai_response.x402_payment {
                 log::info!("[NATIVE_TOOL_LOOP] x402 payment made: {} {}", payment_info.amount_formatted, payment_info.asset);
                 self.broadcaster.broadcast(GatewayEvent::x402_payment(
@@ -577,11 +694,46 @@ impl MessageDispatcher {
                     &payment_info.pay_to,
                     payment_info.resource.as_deref(),
                 ));
+                // Save payment to database for history tracking
+                if let Err(e) = self.db.record_x402_payment(
+                    Some(original_message.channel_id),
+                    None, // tool_name - this is an AI call, not a tool
+                    payment_info.resource.as_deref(),
+                    &payment_info.amount,
+                    &payment_info.amount_formatted,
+                    &payment_info.asset,
+                    &payment_info.pay_to,
+                ) {
+                    log::error!("[NATIVE_TOOL_LOOP] Failed to record x402 payment: {}", e);
+                }
             }
 
-            // If no tool calls, return the content
+            // If no tool calls, return the content with tool call log prepended
             if ai_response.tool_calls.is_empty() {
-                return Ok(ai_response.content);
+                if tool_call_log.is_empty() {
+                    return Ok(ai_response.content);
+                } else {
+                    // Prepend tool call log to the final response
+                    let tool_log_text = tool_call_log.join("\n");
+                    return Ok(format!("{}\n\n{}", tool_log_text, ai_response.content));
+                }
+            }
+
+            // Log and broadcast each tool call for real-time display in chat
+            for call in &ai_response.tool_calls {
+                let args_pretty = serde_json::to_string_pretty(&call.arguments)
+                    .unwrap_or_else(|_| call.arguments.to_string());
+                tool_call_log.push(format!(
+                    "🔧 **Tool Call:** `{}`\n```json\n{}\n```",
+                    call.name,
+                    args_pretty
+                ));
+                // Emit real-time event for frontend to display immediately
+                self.broadcaster.broadcast(GatewayEvent::agent_tool_call(
+                    original_message.channel_id,
+                    &call.name,
+                    &call.arguments,
+                ));
             }
 
             // Execute tool calls
@@ -590,6 +742,8 @@ impl MessageDispatcher {
                 tool_config,
                 tool_context,
                 original_message.channel_id,
+                0,
+                &original_message.user_id,
             ).await;
 
             // Add to tool history for next iteration
@@ -599,8 +753,20 @@ impl MessageDispatcher {
             ));
         }
 
-        // If we hit max iterations, return whatever content we have
-        Err("Native tool loop completed without final response".to_string())
+        // If we hit max iterations, return whatever content we have with tool log
+        if tool_call_log.is_empty() {
+            Err(format!(
+                "Tool loop hit max iterations ({}) without final response. This may happen with long-running async jobs.",
+                MAX_TOOL_ITERATIONS
+            ))
+        } else {
+            let tool_log_text = tool_call_log.join("\n");
+            Err(format!(
+                "Tool loop hit max iterations ({}). Last tool calls:\n{}",
+                MAX_TOOL_ITERATIONS,
+                tool_log_text
+            ))
+        }
     }
 
     /// Generate response using text-based JSON tool calling (Llama archetype)
@@ -624,6 +790,8 @@ impl MessageDispatcher {
 
         let mut final_response = String::new();
         let mut iterations = 0;
+        // Track tool calls to include in the response
+        let mut tool_call_log: Vec<String> = Vec::new();
 
         loop {
             iterations += 1;
@@ -635,11 +803,26 @@ impl MessageDispatcher {
             }
 
             // Generate response (text-only) - with x402 events
-            let ai_content = client.generate_text_with_events(
+            let (ai_content, payment) = client.generate_text_with_events(
                 conversation.clone(),
                 &self.broadcaster,
                 original_message.channel_id,
             ).await?;
+
+            // Save x402 payment if one was made
+            if let Some(ref payment_info) = payment {
+                if let Err(e) = self.db.record_x402_payment(
+                    Some(original_message.channel_id),
+                    None,
+                    payment_info.resource.as_deref(),
+                    &payment_info.amount,
+                    &payment_info.amount_formatted,
+                    &payment_info.asset,
+                    &payment_info.pay_to,
+                ) {
+                    log::error!("[TEXT_TOOL_LOOP] Failed to record x402 payment: {}", e);
+                }
+            }
 
             log::info!("[TEXT_TOOL_LOOP] Raw AI response: {}", ai_content);
 
@@ -662,6 +845,21 @@ impl MessageDispatcher {
                             tool_call.tool_params
                         );
 
+                        // Log and broadcast tool call for real-time display in chat
+                        let args_pretty = serde_json::to_string_pretty(&tool_call.tool_params)
+                            .unwrap_or_else(|_| tool_call.tool_params.to_string());
+                        tool_call_log.push(format!(
+                            "🔧 **Tool Call:** `{}`\n```json\n{}\n```",
+                            tool_call.tool_name,
+                            args_pretty
+                        ));
+                        // Emit real-time event for frontend to display immediately
+                        self.broadcaster.broadcast(GatewayEvent::agent_tool_call(
+                            original_message.channel_id,
+                            &tool_call.tool_name,
+                            &tool_call.tool_params,
+                        ));
+
                         // Handle special "use_skill" tool
                         let tool_result = if tool_call.tool_name == "use_skill" {
                             self.execute_skill_tool(&tool_call.tool_params).await
@@ -678,12 +876,13 @@ impl MessageDispatcher {
                         log::info!("[TEXT_TOOL_LOOP] Tool result success: {}", tool_result.success);
                         log::debug!("[TEXT_TOOL_LOOP] Tool result content: {}", tool_result.content);
 
-                        // Broadcast tool execution event
+                        // Broadcast tool execution event with result content
                         let _ = self.broadcaster.broadcast(GatewayEvent::tool_result(
                             original_message.channel_id,
                             &tool_call.tool_name,
                             tool_result.success,
                             0, // duration_ms - not tracked for text-based tool calls
+                            &tool_result.content,
                         ));
 
                         // Add the assistant's response and tool result to conversation
@@ -707,14 +906,25 @@ impl MessageDispatcher {
                         continue;
                     } else {
                         // No tool call, this is the final response
-                        final_response = agent_response.body;
+                        // Prepend tool call log if any tools were called
+                        if tool_call_log.is_empty() {
+                            final_response = agent_response.body;
+                        } else {
+                            let tool_log_text = tool_call_log.join("\n");
+                            final_response = format!("{}\n\n{}", tool_log_text, agent_response.body);
+                        }
                         break;
                     }
                 }
                 None => {
                     // Couldn't parse as structured response, return raw content
                     log::warn!("[TEXT_TOOL_LOOP] Could not parse response, returning raw content");
-                    final_response = ai_content;
+                    if tool_call_log.is_empty() {
+                        final_response = ai_content;
+                    } else {
+                        let tool_log_text = tool_call_log.join("\n");
+                        final_response = format!("{}\n\n{}", tool_log_text, ai_content);
+                    }
                     break;
                 }
             }
@@ -749,8 +959,7 @@ impl MessageDispatcher {
         match skill {
             Some(skill) => {
                 // Determine the skills directory path
-                let skills_dir = std::env::var("STARK_SKILLS_DIR")
-                    .unwrap_or_else(|_| "./skills".to_string());
+                let skills_dir = crate::config::skills_dir();
                 let skill_base_dir = format!("{}/{}", skills_dir, skill.name);
 
                 // Return the skill's instructions/body along with context
@@ -791,6 +1000,8 @@ impl MessageDispatcher {
         tool_config: &ToolConfig,
         tool_context: &ToolContext,
         channel_id: i64,
+        _session_id: i64,
+        _user_id: &str,
     ) -> Vec<ToolResponse> {
         let mut responses = Vec::new();
 
@@ -834,12 +1045,13 @@ impl MessageDispatcher {
                 }
             }
 
-            // Emit tool result event (legacy event for backwards compatibility)
+            // Emit tool result event with content for UI display
             self.broadcaster.broadcast(GatewayEvent::tool_result(
                 channel_id,
                 &call.name,
                 result.success,
                 duration_ms,
+                &result.content,
             ));
 
             // Log the execution
@@ -944,6 +1156,44 @@ impl MessageDispatcher {
             }
         }
 
+        // Phase 6: Add cross-session memories from other channels
+        if self.memory_config.enable_cross_session_memory {
+            if let Ok(cross_memories) = self.db.get_cross_channel_memories(
+                identity_id,
+                Some(&message.channel_type),
+                self.memory_config.cross_session_memory_limit,
+            ) {
+                if !cross_memories.is_empty() {
+                    prompt.push_str("## Context from Other Channels\n");
+                    for mem in cross_memories {
+                        let channel_label = mem.source_channel_type
+                            .as_deref()
+                            .unwrap_or("unknown");
+                        let type_label = match mem.memory_type {
+                            MemoryType::Preference => "preference",
+                            MemoryType::Fact => "fact",
+                            MemoryType::Task => "task",
+                            _ => "memory",
+                        };
+                        prompt.push_str(&format!("- [{}:{}] {}\n", channel_label, type_label, mem.content));
+                    }
+                    prompt.push('\n');
+                }
+            }
+        }
+
+        // Add available API keys (so the agent knows what credentials are configured)
+        if let Ok(keys) = self.db.list_api_keys() {
+            if !keys.is_empty() {
+                prompt.push_str("## Available API Keys\n");
+                prompt.push_str("The following API keys are configured and available as environment variables when using the exec tool:\n");
+                for key in &keys {
+                    prompt.push_str(&format!("- ${}\n", key.service_name));
+                }
+                prompt.push('\n');
+            }
+        }
+
         // Add context
         prompt.push_str(&format!(
             "## Current Request\nUser: {} | Channel: {}\n",
@@ -964,79 +1214,29 @@ impl MessageDispatcher {
     ) {
         let today = Utc::now().date_naive();
 
-        // Process daily logs
-        for cap in self.daily_log_pattern.captures_iter(response) {
-            if let Some(content) = cap.get(1) {
-                let content_str = content.as_str().trim();
-                if !content_str.is_empty() {
-                    if let Err(e) = self.db.create_memory(
-                        MemoryType::DailyLog,
-                        content_str,
-                        None,
-                        None,
-                        5,
-                        Some(identity_id),
-                        Some(session_id),
-                        Some(channel_type),
-                        message_id,
-                        Some(today),
-                        None,
-                    ) {
-                        log::error!("Failed to create daily log: {}", e);
-                    } else {
-                        log::info!("Created daily log: {}", content_str);
-                    }
-                }
-            }
-        }
-
-        // Process regular remember markers (importance 7)
-        for cap in self.remember_pattern.captures_iter(response) {
-            if let Some(content) = cap.get(1) {
-                let content_str = content.as_str().trim();
-                if !content_str.is_empty() {
-                    if let Err(e) = self.db.create_memory(
-                        MemoryType::LongTerm,
-                        content_str,
-                        None,
-                        None,
-                        7,
-                        Some(identity_id),
-                        Some(session_id),
-                        Some(channel_type),
-                        message_id,
-                        None,
-                        None,
-                    ) {
-                        log::error!("Failed to create long-term memory: {}", e);
-                    } else {
-                        log::info!("Created long-term memory: {}", content_str);
-                    }
-                }
-            }
-        }
-
-        // Process important remember markers (importance 9)
-        for cap in self.remember_important_pattern.captures_iter(response) {
-            if let Some(content) = cap.get(1) {
-                let content_str = content.as_str().trim();
-                if !content_str.is_empty() {
-                    if let Err(e) = self.db.create_memory(
-                        MemoryType::LongTerm,
-                        content_str,
-                        None,
-                        None,
-                        9,
-                        Some(identity_id),
-                        Some(session_id),
-                        Some(channel_type),
-                        message_id,
-                        None,
-                        None,
-                    ) {
-                        log::error!("Failed to create important memory: {}", e);
-                    } else {
-                        log::info!("Created important memory: {}", content_str);
+        for marker in &self.memory_markers {
+            for cap in marker.pattern.captures_iter(response) {
+                if let Some(content) = cap.get(1) {
+                    let content_str = content.as_str().trim();
+                    if !content_str.is_empty() {
+                        let date = if marker.use_today_date { Some(today) } else { None };
+                        if let Err(e) = self.db.create_memory(
+                            marker.memory_type.clone(),
+                            content_str,
+                            None,
+                            None,
+                            marker.importance,
+                            Some(identity_id),
+                            Some(session_id),
+                            Some(channel_type),
+                            message_id,
+                            date,
+                            None,
+                        ) {
+                            log::error!("Failed to create {}: {}", marker.name, e);
+                        } else {
+                            log::info!("Created {}: {}", marker.name, content_str);
+                        }
                     }
                 }
             }
@@ -1046,9 +1246,9 @@ impl MessageDispatcher {
     /// Remove memory markers from the response before returning to user
     fn clean_response(&self, response: &str) -> String {
         let mut clean = response.to_string();
-        clean = self.daily_log_pattern.replace_all(&clean, "").to_string();
-        clean = self.remember_pattern.replace_all(&clean, "").to_string();
-        clean = self.remember_important_pattern.replace_all(&clean, "").to_string();
+        for marker in &self.memory_markers {
+            clean = marker.pattern.replace_all(&clean, "").to_string();
+        }
         // Clean up any double spaces or trailing whitespace
         clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
         clean.trim().to_string()

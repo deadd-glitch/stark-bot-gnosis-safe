@@ -281,7 +281,7 @@ export default function ExecutionProgress({ className }: ExecutionProgressProps)
   return (
     <div
       className={clsx(
-        'bg-slate-800/80 backdrop-blur border border-slate-700 rounded-lg p-4 transition-opacity duration-300',
+        'bg-slate-800/80 backdrop-blur border border-slate-700 rounded-lg p-4 transition-opacity duration-300 max-h-[100px] overflow-y-auto',
         visible ? 'opacity-100' : 'opacity-0',
         className
       )}

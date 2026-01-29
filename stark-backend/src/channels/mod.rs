@@ -5,7 +5,7 @@ pub mod telegram;
 pub mod types;
 
 pub use dispatcher::MessageDispatcher;
-pub use types::{ChannelHandle, NormalizedMessage};
+pub use types::{ChannelHandle, ChannelType, NormalizedMessage};
 
 use crate::db::Database;
 use crate::execution::ExecutionTracker;
@@ -118,8 +118,17 @@ impl ChannelManager {
         let broadcaster = self.broadcaster.clone();
         let running_channels = self.running_channels.clone();
 
-        match channel_type.as_str() {
-            "telegram" => {
+        // Parse channel type
+        let channel_type_enum = match types::ChannelType::from_str(&channel_type) {
+            Some(ct) => ct,
+            None => {
+                self.running_channels.remove(&channel_id);
+                return Err(format!("Unknown channel type: {}", channel_type));
+            }
+        };
+
+        match channel_type_enum {
+            types::ChannelType::Telegram => {
                 tokio::spawn(async move {
                     let result = telegram::start_telegram_listener(
                         channel,
@@ -138,7 +147,7 @@ impl ChannelManager {
                     running_channels.remove(&channel_id);
                 });
             }
-            "slack" => {
+            types::ChannelType::Slack => {
                 tokio::spawn(async move {
                     let result = slack::start_slack_listener(
                         channel,
@@ -157,7 +166,7 @@ impl ChannelManager {
                     running_channels.remove(&channel_id);
                 });
             }
-            "discord" => {
+            types::ChannelType::Discord => {
                 tokio::spawn(async move {
                     let result = discord::start_discord_listener(
                         channel,
@@ -175,11 +184,6 @@ impl ChannelManager {
                     // Remove from running channels
                     running_channels.remove(&channel_id);
                 });
-            }
-            other => {
-                // Remove the handle we just added
-                self.running_channels.remove(&channel_id);
-                return Err(format!("Unknown channel type: {}", other));
             }
         }
 

@@ -103,7 +103,7 @@ export default function DebugPanel({ className }: DebugPanelProps) {
   const { on, off } = useGateway();
 
   // Store tool execution data to match with tasks
-  const toolDataRef = useRef<Map<string, { params: Record<string, unknown>; result?: string; success?: boolean; duration?: number }>>(new Map());
+  const toolDataRef = useRef<Map<string, { params: Record<string, unknown>; result?: string; success?: boolean; duration?: number; content?: string }>>(new Map());
 
   // Force re-render every second to update elapsed times
   useEffect(() => {
@@ -148,8 +148,9 @@ export default function DebugPanel({ className }: DebugPanelProps) {
       children: [],
     };
 
-    setExecutions((prev) => {
-      const newMap = new Map(prev);
+    // Clear previous executions and start fresh with the new one
+    setExecutions(() => {
+      const newMap = new Map<string, DebugTask>();
       newMap.set(event.execution_id, newExecution);
       return newMap;
     });
@@ -167,16 +168,19 @@ export default function DebugPanel({ className }: DebugPanelProps) {
     const event = data as ExecutionEvent & {
       id?: string;
       type?: string;
+      name?: string;
       description?: string;
+      active_form?: string;
+      parent_id?: string;
     };
 
     // Extract tool name and context from description
-    const desc = event.description || '';
+    const desc = event.description || event.name || '';
     const toolName = extractToolName(desc);
 
     const newTask: DebugTask = {
       id: event.id || event.task_id || crypto.randomUUID(),
-      parentId: event.parent_task_id || (data as Record<string, unknown>).parent_id as string,
+      parentId: event.parent_task_id || event.parent_id,
       name: event.name || desc || 'Task',
       description: desc,
       taskType: event.type || (data as Record<string, unknown>).type as string,
@@ -187,7 +191,14 @@ export default function DebugPanel({ className }: DebugPanelProps) {
       toolName,
     };
 
-    updateExecution(event.execution_id, (execution) => {
+    // If no execution_id, try to find it from channel executions
+    const execId = event.execution_id;
+    if (!execId) {
+      console.warn('Task started without execution_id:', event);
+      return;
+    }
+
+    updateExecution(execId, (execution) => {
       const addToParent = (tasks: DebugTask[]): DebugTask[] => {
         return tasks.map((task) => {
           if (task.id === newTask.parentId) {
@@ -211,14 +222,15 @@ export default function DebugPanel({ className }: DebugPanelProps) {
     toolDataRef.current.set(`pending_${event.tool_name}`, { params: event.parameters });
   }, []);
 
-  // Listen for tool.result to capture success/duration
+  // Listen for tool.result to capture success/duration/content
   const handleToolResult = useCallback((data: unknown) => {
-    const event = data as { tool_name: string; success: boolean; duration_ms: number };
+    const event = data as { tool_name: string; success: boolean; duration_ms: number; content: string };
     const key = `pending_${event.tool_name}`;
     const existing = toolDataRef.current.get(key);
     if (existing) {
       existing.success = event.success;
       existing.duration = event.duration_ms;
+      existing.content = event.content;
     }
   }, []);
 
@@ -296,6 +308,23 @@ export default function DebugPanel({ className }: DebugPanelProps) {
     const event = data as ExecutionEvent & { metrics?: { tool_uses?: number; tokens_used?: number; duration_ms?: number } };
     const metrics = event.metrics || {};
 
+    // Helper to recursively complete all in-progress child tasks
+    const completeAllChildren = (tasks: DebugTask[]): DebugTask[] => {
+      return tasks.map((task) => {
+        const updatedChildren = completeAllChildren(task.children);
+        if (task.status === 'in_progress') {
+          return {
+            ...task,
+            status: 'completed' as const,
+            endTime: Date.now(),
+            duration: Date.now() - (task.startTime || Date.now()),
+            children: updatedChildren,
+          };
+        }
+        return { ...task, children: updatedChildren };
+      });
+    };
+
     updateExecution(event.execution_id, (execution) => ({
       ...execution,
       status: 'completed',
@@ -303,6 +332,7 @@ export default function DebugPanel({ className }: DebugPanelProps) {
       duration: metrics.duration_ms ?? event.duration_ms ?? (Date.now() - (execution.startTime || Date.now())),
       toolsCount: metrics.tool_uses ?? execution.toolsCount,
       tokensUsed: metrics.tokens_used ?? execution.tokensUsed,
+      children: completeAllChildren(execution.children),
     }));
   }, [updateExecution]);
 

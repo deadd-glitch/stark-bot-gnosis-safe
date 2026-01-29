@@ -13,12 +13,14 @@ mod db;
 mod execution;
 mod gateway;
 mod integrations;
+mod memory;
 mod middleware;
 mod models;
 mod scheduler;
 mod skills;
 mod tools;
 mod x402;
+mod eip8004;
 
 use channels::MessageDispatcher;
 use config::Config;
@@ -168,6 +170,8 @@ async fn main() -> std::io::Result<()> {
             .configure(controllers::skills::config)
             .configure(controllers::cron::config)
             .configure(controllers::gmail::config)
+            .configure(controllers::payments::config)
+            .configure(controllers::eip8004::config)
             // Serve static files, with SPA fallback to index.html for client-side routing
             .service(
                 Files::new("/", "./stark-frontend/dist")

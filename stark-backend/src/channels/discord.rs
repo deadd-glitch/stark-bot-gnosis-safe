@@ -1,5 +1,5 @@
 use crate::channels::dispatcher::MessageDispatcher;
-use crate::channels::types::NormalizedMessage;
+use crate::channels::types::{ChannelType, NormalizedMessage};
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::Channel;
@@ -44,7 +44,7 @@ impl EventHandler for DiscordHandler {
 
         let normalized = NormalizedMessage {
             channel_id: self.channel_id,
-            channel_type: "discord".to_string(),
+            channel_type: ChannelType::Discord.to_string(),
             chat_id: msg.channel_id.to_string(),
             user_id,
             user_name: user_name.clone(),
@@ -157,7 +157,7 @@ pub async fn start_discord_listener(
     // Emit started event
     broadcaster.broadcast(GatewayEvent::channel_started(
         channel_id,
-        "discord",
+        ChannelType::Discord.as_str(),
         &channel_name,
     ));
 
@@ -178,7 +178,7 @@ pub async fn start_discord_listener(
                     log::error!("{}", error);
                     broadcaster.broadcast(GatewayEvent::channel_stopped(
                         channel_id,
-                        "discord",
+                        ChannelType::Discord.as_str(),
                         &channel_name,
                     ));
                     return Err(error);
@@ -190,7 +190,7 @@ pub async fn start_discord_listener(
     // Emit stopped event
     broadcaster.broadcast(GatewayEvent::channel_stopped(
         channel_id,
-        "discord",
+        ChannelType::Discord.as_str(),
         &channel_name,
     ));
 

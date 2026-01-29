@@ -1,5 +1,5 @@
 use crate::channels::dispatcher::MessageDispatcher;
-use crate::channels::types::NormalizedMessage;
+use crate::channels::types::{ChannelType, NormalizedMessage};
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::Channel;
@@ -45,7 +45,7 @@ pub async fn start_telegram_listener(
     // Emit started event
     broadcaster.broadcast(GatewayEvent::channel_started(
         channel_id,
-        "telegram",
+        ChannelType::Telegram.as_str(),
         &channel_name,
     ));
 
@@ -77,7 +77,7 @@ pub async fn start_telegram_listener(
 
                     let normalized = NormalizedMessage {
                         channel_id,
-                        channel_type: "telegram".to_string(),
+                        channel_type: ChannelType::Telegram.to_string(),
                         chat_id: msg.chat.id.to_string(),
                         user_id,
                         user_name: user_name.clone(),
@@ -133,7 +133,7 @@ pub async fn start_telegram_listener(
     // Emit stopped event
     broadcaster.broadcast(GatewayEvent::channel_stopped(
         channel_id,
-        "telegram",
+        ChannelType::Telegram.as_str(),
         &channel_name,
     ));
 

@@ -1,182 +1,107 @@
 ---
 name: bankr
 description: "Interact with Bankr - check token info, wallet balances, and use the Agent API to execute prompts and transactions."
-version: 1.0.0
+version: 2.0.0
 author: starkbot
 homepage: https://bankr.bot
-metadata: {"requires_auth": true, "clawdbot":{"emoji":"🏦","requires":{"bins":["curl"]}}}
-requires_binaries: [curl]
+metadata: {"requires_auth": true, "clawdbot":{"emoji":"🏦","requires":{"bins":["curl","jq"]}}}
+requires_binaries: [curl, jq]
 tags: [crypto, defi, bankr, bnkr, base, wallet, yield, token, agent]
 ---
 
 # Bankr Integration
 
-Bankr is an AI-powered crypto banking agent. This skill provides two levels of access:
+Bankr is an AI-powered crypto banking agent.
 
-1. **Public APIs** - Read-only token info, prices, balances (no API key needed)
-2. **Agent API** - Execute prompts and transactions (requires API key with Agent access)
+## How to Use This Skill
+
+**IMPORTANT:** When the user wants to interact with Bankr (buy tokens, check balance, swap, etc.), use the `exec` tool with **timeout: 120** to run this single command that handles everything:
+
+```bash
+PROMPT='USER_PROMPT_HERE' && \
+JOB_ID=$(curl -sf -X POST "https://api.bankr.bot/agent/prompt" \
+  -H "X-API-Key: $BANKR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\": \"$PROMPT\"}" | jq -r '.jobId') && \
+echo "Job submitted: $JOB_ID" && \
+for i in {1..30}; do \
+  sleep 3; \
+  RESULT=$(curl -sf "https://api.bankr.bot/agent/job/$JOB_ID" -H "X-API-Key: $BANKR_API_KEY"); \
+  STATUS=$(echo "$RESULT" | jq -r '.status'); \
+  echo "Poll $i: $STATUS"; \
+  if [ "$STATUS" = "completed" ]; then \
+    echo "=== BANKR RESPONSE ==="; \
+    echo "$RESULT" | jq -r '.response'; \
+    exit 0; \
+  elif [ "$STATUS" = "failed" ]; then \
+    echo "=== ERROR ==="; \
+    echo "$RESULT" | jq -r '.error // .message // "Unknown error"'; \
+    exit 1; \
+  fi; \
+done; \
+echo "Timeout: Job did not complete in 90 seconds"
+```
+
+**Replace `USER_PROMPT_HERE` with the user's actual request** (properly escaped for JSON).
+
+### Example Usage
+
+User says: "buy 1 $starkbot"
+
+Call `exec` tool with parameters:
+- **command**: (the bash script below with PROMPT set)
+- **timeout**: 120
+
+```bash
+PROMPT='buy 1 $starkbot' && \
+JOB_ID=$(curl -sf -X POST "https://api.bankr.bot/agent/prompt" \
+  -H "X-API-Key: $BANKR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"prompt\": \"$PROMPT\"}" | jq -r '.jobId') && \
+echo "Job submitted: $JOB_ID" && \
+for i in {1..30}; do \
+  sleep 3; \
+  RESULT=$(curl -sf "https://api.bankr.bot/agent/job/$JOB_ID" -H "X-API-Key: $BANKR_API_KEY"); \
+  STATUS=$(echo "$RESULT" | jq -r '.status'); \
+  echo "Poll $i: $STATUS"; \
+  if [ "$STATUS" = "completed" ]; then \
+    echo "=== BANKR RESPONSE ==="; \
+    echo "$RESULT" | jq -r '.response'; \
+    exit 0; \
+  elif [ "$STATUS" = "failed" ]; then \
+    echo "=== ERROR ==="; \
+    echo "$RESULT" | jq -r '.error // .message // "Unknown error"'; \
+    exit 1; \
+  fi; \
+done; \
+echo "Timeout: Job did not complete in 90 seconds"
+```
+
+This single command:
+1. Submits the prompt to Bankr
+2. Polls every 3 seconds for up to 90 seconds
+3. Returns the response when complete
+4. Handles errors and timeouts
+
+**DO NOT** manually poll with multiple exec calls. Use this single command.
 
 ---
 
-# Agent API (Requires API Key)
-
-**You'll need an API key with Agent API access enabled.** Sign in, generate one, and enable agent access at: https://bankr.bot/api
-
-## What You Can Do
-
-With the Bankr Agent API, you can:
-- Submit prompts to the Bankr AI agent for your wallet
-- Check the status of submitted jobs
-- Cancel pending or processing jobs
-
-## Important Security Notes
-
-The Agent API is powerful - it controls your Bankr wallet via API. **With great power comes great responsibility.**
-
-**Recommended Setup:**
-1. Sign up for a new Bankr account via email
-2. Generate a new Bankr API key and enable agent access
-3. Fund the account with limited assets
-4. Ensure your API key is not publicly shared *anywhere* or with *anyone*
-5. Explore the API and understand it well before increasing assets
-
-**WARNING:** Do not share your Bankr API key with anyone or any untrusted app. If you share your API key with agent access enabled, you risk losing all your assets in that Bankr account.
-
-If you leak your API key, visit https://bankr.bot/api and revoke it immediately.
-
-## Authentication
-
-All Agent API endpoints require authentication via API key:
-
-```
-X-API-Key: your_api_key_here
-```
-
-**Base URL:** `https://api.bankr.bot`
-
-## Agent API Operations
-
-### Submit a Prompt
-
-Send a prompt to the Bankr AI agent for processing.
-
-```bash
-curl -X POST "https://api.bankr.bot/agent/prompt" \
-  -H "X-API-Key: $BANKR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "What is the current price of ETH?"}'
-```
-
-**Response (202 Accepted):**
-```json
-{
-  "success": true,
-  "jobId": "job_abc123",
-  "status": "pending",
-  "message": "Job submitted successfully"
-}
-```
-
-**Prompt Limits:** Max 10,000 characters
-
-### Check Job Status
-
-Get the current status of a submitted job.
-
-```bash
-curl "https://api.bankr.bot/agent/job/JOB_ID" \
-  -H "X-API-Key: $BANKR_API_KEY"
-```
-
-**Job Statuses:**
-- `pending` - Job is queued for processing
-- `processing` - Job is currently being processed
-- `completed` - Job finished successfully
-- `failed` - Job encountered an error
-- `cancelled` - Job was cancelled by user
-
-**Completed Job Response:**
-```json
-{
-  "success": true,
-  "jobId": "job_abc123",
-  "status": "completed",
-  "prompt": "What is the current price of ETH?",
-  "response": "The current price of ETH is $3,245.67",
-  "richData": [...],
-  "createdAt": "2024-01-15T10:30:00Z",
-  "completedAt": "2024-01-15T10:30:05Z",
-  "processingTime": 5000
-}
-```
-
-### Cancel a Job
-
-Cancel a pending or processing job.
-
-```bash
-curl -X POST "https://api.bankr.bot/agent/job/JOB_ID/cancel" \
-  -H "X-API-Key: $BANKR_API_KEY"
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "jobId": "job_abc123",
-  "status": "cancelled",
-  "cancelledAt": "2024-01-15T10:30:02Z"
-}
-```
-
-## Workflow: Submit and Poll for Result
-
-```bash
-# 1. Submit prompt
-JOB_ID=$(curl -s -X POST "https://api.bankr.bot/agent/prompt" \
-  -H "X-API-Key: $BANKR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Check my wallet balance"}' | jq -r '.jobId')
-
-echo "Job ID: $JOB_ID"
-
-# 2. Poll for completion
-while true; do
-  STATUS=$(curl -s "https://api.bankr.bot/agent/job/$JOB_ID" \
-    -H "X-API-Key: $BANKR_API_KEY")
-
-  JOB_STATUS=$(echo $STATUS | jq -r '.status')
-  echo "Status: $JOB_STATUS"
-
-  if [ "$JOB_STATUS" = "completed" ]; then
-    echo "Response: $(echo $STATUS | jq -r '.response')"
-    break
-  elif [ "$JOB_STATUS" = "failed" ]; then
-    echo "Error: $(echo $STATUS | jq -r '.error')"
-    break
-  fi
-
-  sleep 2
-done
-```
-
-## Example Prompts
+## Example Prompts for Bankr
 
 - `"What is my wallet balance?"`
+- `"buy 1 $STARKBOT"` or `"buy 0.01 ETH worth of $BNKR"`
+- `"swap 0.1 ETH for USDC"`
 - `"What is the current price of ETH?"`
 - `"Show me trending tokens"`
-- `"Swap 0.1 ETH for USDC"`
 - `"What tokens do I hold?"`
 
-## Error Handling
+---
 
-| Status | Error | Meaning |
-|--------|-------|---------|
-| 400 | Invalid request | Bad request format |
-| 400 | Prompt too long | Exceeds 10,000 chars |
-| 401 | Authentication required | Missing or invalid API key |
-| 403 | Agent API access not enabled | API key doesn't have agent access |
-| 404 | Job not found | Invalid job ID or not your job |
+## Requirements
+
+- **API Key**: Must have `BANKR_API_KEY` configured with Agent API access enabled
+- **Get API Key**: https://bankr.bot/api (enable "Agent API access")
 
 ---
 

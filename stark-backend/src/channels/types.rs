@@ -1,12 +1,62 @@
 use serde::{Deserialize, Serialize};
 
+/// Supported channel types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChannelType {
+    Telegram,
+    Slack,
+    Discord,
+}
+
+impl ChannelType {
+    /// String representation for database/API
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Telegram => "telegram",
+            Self::Slack => "slack",
+            Self::Discord => "discord",
+        }
+    }
+
+    /// Parse from string
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "telegram" => Some(Self::Telegram),
+            "slack" => Some(Self::Slack),
+            "discord" => Some(Self::Discord),
+            _ => None,
+        }
+    }
+
+    /// All supported channel types
+    pub fn all() -> &'static [ChannelType] {
+        &[Self::Telegram, Self::Slack, Self::Discord]
+    }
+
+    /// Display name for UI
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Telegram => "Telegram",
+            Self::Slack => "Slack",
+            Self::Discord => "Discord",
+        }
+    }
+}
+
+impl std::fmt::Display for ChannelType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Normalized message from any channel (Telegram, Slack, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizedMessage {
     /// Channel database ID
     pub channel_id: i64,
-    /// Channel type (telegram, slack)
-    pub channel_type: String,
+    /// Channel type
+    pub channel_type: String,  // Keep as String for now for compatibility
     /// Platform-specific chat/conversation ID
     pub chat_id: String,
     /// Platform-specific user ID

@@ -38,7 +38,7 @@ impl Database {
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO heartbeat_configs (channel_id, interval_minutes, target, enabled, created_at, updated_at)
-             VALUES (?1, 30, 'last', 1, ?2, ?2)",
+             VALUES (?1, 1440, 'last', 0, ?2, ?2)",
             rusqlite::params![channel_id, now],
         )?;
 

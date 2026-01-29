@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Zap, Upload, Trash2, ExternalLink } from 'lucide-react';
 import Card, { CardContent } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
-import { getSkills, uploadSkill, deleteSkill, SkillInfo } from '@/lib/api';
+import { getSkills, uploadSkill, deleteSkill, setSkillEnabled, SkillInfo } from '@/lib/api';
 
 export default function Skills() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -54,6 +54,17 @@ export default function Skills() {
       setSkills((prev) => prev.filter((s) => s.name !== name));
     } catch (err) {
       setError('Failed to delete skill');
+    }
+  };
+
+  const handleToggleEnabled = async (name: string, currentEnabled: boolean) => {
+    try {
+      await setSkillEnabled(name, !currentEnabled);
+      setSkills((prev) =>
+        prev.map((s) => (s.name === name ? { ...s, enabled: !currentEnabled } : s))
+      );
+    } catch (err) {
+      setError('Failed to update skill');
     }
   };
 
@@ -151,15 +162,16 @@ export default function Skills() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span
-                      className={`px-2 py-1 text-xs rounded ${
+                    <button
+                      onClick={() => handleToggleEnabled(skill.name, skill.enabled)}
+                      className={`px-2 py-1 text-xs rounded cursor-pointer transition-colors ${
                         skill.enabled
-                          ? 'bg-green-500/20 text-green-400'
-                          : 'bg-slate-700 text-slate-400'
+                          ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                          : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
                       }`}
                     >
                       {skill.enabled ? 'Enabled' : 'Disabled'}
-                    </span>
+                    </button>
                     <Button
                       variant="ghost"
                       size="sm"

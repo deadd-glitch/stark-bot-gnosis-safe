@@ -1,6 +1,8 @@
+use crate::gateway::events::EventBroadcaster;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Tool groups for access control
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -182,7 +184,7 @@ impl ToolResult {
 }
 
 /// Context provided to tools during execution
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolContext {
     pub channel_id: Option<i64>,
     pub channel_type: Option<String>,
@@ -193,6 +195,23 @@ pub struct ToolContext {
     pub workspace_dir: Option<String>,
     /// Additional context data
     pub extra: HashMap<String, Value>,
+    /// Event broadcaster for real-time events (e.g., tx.pending)
+    pub broadcaster: Option<Arc<EventBroadcaster>>,
+}
+
+impl std::fmt::Debug for ToolContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolContext")
+            .field("channel_id", &self.channel_id)
+            .field("channel_type", &self.channel_type)
+            .field("user_id", &self.user_id)
+            .field("session_id", &self.session_id)
+            .field("identity_id", &self.identity_id)
+            .field("workspace_dir", &self.workspace_dir)
+            .field("extra", &self.extra)
+            .field("broadcaster", &self.broadcaster.is_some())
+            .finish()
+    }
 }
 
 impl Default for ToolContext {
@@ -205,6 +224,7 @@ impl Default for ToolContext {
             identity_id: None,
             workspace_dir: None,
             extra: HashMap::new(),
+            broadcaster: None,
         }
     }
 }
@@ -240,15 +260,20 @@ impl ToolContext {
         self
     }
 
-    /// Add an API key to the context (for use by tools)
-    pub fn with_api_key(mut self, service: &str, key: String) -> Self {
-        self.extra.insert(format!("api_key_{}", service), serde_json::json!(key));
+    /// Add an API key to the context
+    /// Keys are stored by their exact name (e.g., "GITHUB_TOKEN", "TWITTER_CLIENT_ID")
+    pub fn with_api_key(mut self, key_name: &str, key_value: String) -> Self {
+        self.extra.insert(
+            format!("api_key_{}", key_name),
+            serde_json::json!(key_value),
+        );
         self
     }
 
-    /// Get an API key from the context
-    pub fn get_api_key(&self, service: &str) -> Option<String> {
-        self.extra.get(&format!("api_key_{}", service))
+    /// Get an API key from the context by its exact name
+    /// Example: get_api_key("GITHUB_TOKEN")
+    pub fn get_api_key(&self, key_name: &str) -> Option<String> {
+        self.extra.get(&format!("api_key_{}", key_name))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
@@ -257,6 +282,12 @@ impl ToolContext {
     pub fn with_bot_config(mut self, bot_name: String, bot_email: String) -> Self {
         self.extra.insert("bot_name".to_string(), serde_json::json!(bot_name));
         self.extra.insert("bot_email".to_string(), serde_json::json!(bot_email));
+        self
+    }
+
+    /// Add an event broadcaster to the context (for tools to emit real-time events)
+    pub fn with_broadcaster(mut self, broadcaster: Arc<EventBroadcaster>) -> Self {
+        self.broadcaster = Some(broadcaster);
         self
     }
 

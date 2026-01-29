@@ -74,7 +74,7 @@ impl ExecutionTracker {
             &task.description,
             task.active_form.as_deref().unwrap_or(&task.description),
         ));
-        self.broadcaster.broadcast(GatewayEvent::task_started(&task));
+        self.broadcaster.broadcast(GatewayEvent::task_started(&task, &execution_id));
 
         execution_id
     }
@@ -101,6 +101,7 @@ impl ExecutionTracker {
     pub fn start_task(
         &self,
         channel_id: i64,
+        execution_id: &str,
         parent_id: Option<&str>,
         task_type: TaskType,
         description: impl Into<String>,
@@ -130,7 +131,7 @@ impl ExecutionTracker {
 
         // Store and emit
         self.tasks.insert(task_id.clone(), task.clone());
-        self.broadcaster.broadcast(GatewayEvent::task_started(&task));
+        self.broadcaster.broadcast(GatewayEvent::task_started(&task, execution_id));
 
         task_id
     }
@@ -150,7 +151,8 @@ impl ExecutionTracker {
 
         self.start_task(
             channel_id,
-            Some(execution_id),
+            execution_id,
+            Some(execution_id),  // Parent is the execution itself
             TaskType::ToolExecution,
             description,
             Some(&active_form),
@@ -220,21 +222,57 @@ impl ExecutionTracker {
                     .unwrap_or("");
                 // Extract first word of command
                 let first_word = cmd.split_whitespace().next().unwrap_or("command");
-                let short_cmd = if cmd.len() > 50 {
-                    format!("{}...", &cmd[..47])
+
+                // Special handling for curl to show the URL
+                if first_word == "curl" {
+                    // Try to extract URL from curl command
+                    let url = Self::extract_curl_url(cmd);
+                    if let Some(url) = url {
+                        let host = url.split("://")
+                            .nth(1)
+                            .unwrap_or(&url)
+                            .split('/')
+                            .next()
+                            .unwrap_or(&url);
+                        let short_url = if url.len() > 60 {
+                            format!("{}...", &url[..57])
+                        } else {
+                            url.to_string()
+                        };
+                        (format!("curl {}", short_url), format!("Calling {}", host))
+                    } else {
+                        ("Running curl".to_string(), "Running curl".to_string())
+                    }
                 } else {
-                    cmd.to_string()
-                };
-                (format!("Running: {}", short_cmd), format!("Running {}", first_word))
+                    let short_cmd = if cmd.len() > 50 {
+                        format!("{}...", &cmd[..47])
+                    } else {
+                        cmd.to_string()
+                    };
+                    (format!("Running: {}", short_cmd), format!("Running {}", first_word))
+                }
             }
 
             // Skill operations
             "use_skill" => {
-                let skill = args.get("skill")
+                let skill = args.get("skill_name")
+                    .or_else(|| args.get("skill"))
                     .or_else(|| args.get("name"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("skill");
-                (format!("Using skill: {}", skill), format!("Using {}", skill))
+                let input = args.get("input")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let short_input = if input.len() > 40 {
+                    format!("{}...", &input[..37])
+                } else {
+                    input.to_string()
+                };
+                if input.is_empty() {
+                    (format!("Using skill: {}", skill), format!("Using {}", skill))
+                } else {
+                    (format!("Skill {}: {}", skill, short_input), format!("Using {}", skill))
+                }
             }
 
             // Agent/subagent operations
@@ -309,6 +347,56 @@ impl ExecutionTracker {
                 (format!("Using {}", tool_name), format!("Running {}", tool_name))
             }
         }
+    }
+
+    /// Extract URL from a curl command string
+    fn extract_curl_url(cmd: &str) -> Option<String> {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        let mut i = 0;
+        while i < parts.len() {
+            let part = parts[i];
+            // Skip curl itself
+            if part == "curl" {
+                i += 1;
+                continue;
+            }
+            // Skip flags that take arguments
+            if part.starts_with('-') {
+                // Common curl flags that take an argument
+                let flags_with_args = [
+                    "-H", "--header",
+                    "-d", "--data", "--data-raw", "--data-binary",
+                    "-X", "--request",
+                    "-o", "--output",
+                    "-u", "--user",
+                    "-A", "--user-agent",
+                    "-e", "--referer",
+                    "-b", "--cookie",
+                    "-c", "--cookie-jar",
+                    "-F", "--form",
+                    "-T", "--upload-file",
+                    "--connect-timeout",
+                    "--max-time",
+                    "-m",
+                ];
+                if flags_with_args.iter().any(|f| *f == part) {
+                    i += 2; // Skip flag and its argument
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            // This should be the URL (or a positional argument)
+            if part.starts_with("http://") || part.starts_with("https://") {
+                return Some(part.to_string());
+            }
+            // Could be a URL without quotes that got split, or just a path
+            if part.contains("://") || part.contains('.') {
+                return Some(part.to_string());
+            }
+            i += 1;
+        }
+        None
     }
 
     /// Update task metrics

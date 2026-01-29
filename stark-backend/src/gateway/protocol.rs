@@ -2,6 +2,82 @@ use crate::models::{ExecutionTask, TaskMetrics};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Event types for gateway broadcasts
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventType {
+    // Channel events
+    ChannelStarted,
+    ChannelStopped,
+    ChannelError,
+    ChannelMessage,
+    // Agent events
+    AgentResponse,
+    AgentToolCall,  // Real-time tool call notification for chat display
+    // Tool events
+    ToolExecution,
+    ToolResult,
+    // Skill events
+    SkillInvoked,
+    // Execution progress events
+    ExecutionStarted,
+    ExecutionThinking,
+    ExecutionTaskStarted,
+    ExecutionTaskUpdated,
+    ExecutionTaskCompleted,
+    ExecutionCompleted,
+    // Payment events
+    X402Payment,
+    // Confirmation events
+    ConfirmationRequired,
+    ConfirmationApproved,
+    ConfirmationRejected,
+    ConfirmationExpired,
+    // Transaction events
+    TxPending,
+    TxConfirmed,
+}
+
+impl EventType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ChannelStarted => "channel.started",
+            Self::ChannelStopped => "channel.stopped",
+            Self::ChannelError => "channel.error",
+            Self::ChannelMessage => "channel.message",
+            Self::AgentResponse => "agent.response",
+            Self::AgentToolCall => "agent.tool_call",
+            Self::ToolExecution => "tool.execution",
+            Self::ToolResult => "tool.result",
+            Self::SkillInvoked => "skill.invoked",
+            Self::ExecutionStarted => "execution.started",
+            Self::ExecutionThinking => "execution.thinking",
+            Self::ExecutionTaskStarted => "execution.task_started",
+            Self::ExecutionTaskUpdated => "execution.task_updated",
+            Self::ExecutionTaskCompleted => "execution.task_completed",
+            Self::ExecutionCompleted => "execution.completed",
+            Self::X402Payment => "x402.payment",
+            Self::ConfirmationRequired => "confirmation.required",
+            Self::ConfirmationApproved => "confirmation.approved",
+            Self::ConfirmationRejected => "confirmation.rejected",
+            Self::ConfirmationExpired => "confirmation.expired",
+            Self::TxPending => "tx.pending",
+            Self::TxConfirmed => "tx.confirmed",
+        }
+    }
+}
+
+impl std::fmt::Display for EventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl From<EventType> for String {
+    fn from(event_type: EventType) -> Self {
+        event_type.as_str().to_string()
+    }
+}
+
 /// JSON-RPC request from client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcRequest {
@@ -98,7 +174,7 @@ impl GatewayEvent {
 
     pub fn channel_started(channel_id: i64, channel_type: &str, name: &str) -> Self {
         Self::new(
-            "channel.started",
+            EventType::ChannelStarted,
             serde_json::json!({
                 "channel_id": channel_id,
                 "channel_type": channel_type,
@@ -109,7 +185,7 @@ impl GatewayEvent {
 
     pub fn channel_stopped(channel_id: i64, channel_type: &str, name: &str) -> Self {
         Self::new(
-            "channel.stopped",
+            EventType::ChannelStopped,
             serde_json::json!({
                 "channel_id": channel_id,
                 "channel_type": channel_type,
@@ -120,7 +196,7 @@ impl GatewayEvent {
 
     pub fn channel_error(channel_id: i64, error: &str) -> Self {
         Self::new(
-            "channel.error",
+            EventType::ChannelError,
             serde_json::json!({
                 "channel_id": channel_id,
                 "error": error
@@ -135,7 +211,7 @@ impl GatewayEvent {
         text: &str,
     ) -> Self {
         Self::new(
-            "channel.message",
+            EventType::ChannelMessage,
             serde_json::json!({
                 "channel_id": channel_id,
                 "channel_type": channel_type,
@@ -147,7 +223,7 @@ impl GatewayEvent {
 
     pub fn agent_response(channel_id: i64, to: &str, text: &str) -> Self {
         Self::new(
-            "agent.response",
+            EventType::AgentResponse,
             serde_json::json!({
                 "channel_id": channel_id,
                 "to": to,
@@ -156,9 +232,10 @@ impl GatewayEvent {
         )
     }
 
-    pub fn tool_execution(channel_id: i64, tool_name: &str, parameters: &Value) -> Self {
+    /// Emit a tool call notification for real-time display in chat
+    pub fn agent_tool_call(channel_id: i64, tool_name: &str, parameters: &Value) -> Self {
         Self::new(
-            "tool.execution",
+            EventType::AgentToolCall,
             serde_json::json!({
                 "channel_id": channel_id,
                 "tool_name": tool_name,
@@ -167,21 +244,33 @@ impl GatewayEvent {
         )
     }
 
-    pub fn tool_result(channel_id: i64, tool_name: &str, success: bool, duration_ms: i64) -> Self {
+    pub fn tool_execution(channel_id: i64, tool_name: &str, parameters: &Value) -> Self {
         Self::new(
-            "tool.result",
+            EventType::ToolExecution,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "tool_name": tool_name,
+                "parameters": parameters
+            }),
+        )
+    }
+
+    pub fn tool_result(channel_id: i64, tool_name: &str, success: bool, duration_ms: i64, content: &str) -> Self {
+        Self::new(
+            EventType::ToolResult,
             serde_json::json!({
                 "channel_id": channel_id,
                 "tool_name": tool_name,
                 "success": success,
-                "duration_ms": duration_ms
+                "duration_ms": duration_ms,
+                "content": content
             }),
         )
     }
 
     pub fn skill_invoked(channel_id: i64, skill_name: &str) -> Self {
         Self::new(
-            "skill.invoked",
+            EventType::SkillInvoked,
             serde_json::json!({
                 "channel_id": channel_id,
                 "skill_name": skill_name
@@ -202,7 +291,7 @@ impl GatewayEvent {
         active_form: &str,
     ) -> Self {
         Self::new(
-            "execution.started",
+            EventType::ExecutionStarted,
             serde_json::json!({
                 "channel_id": channel_id,
                 "execution_id": execution_id,
@@ -216,7 +305,7 @@ impl GatewayEvent {
     /// AI is thinking/reasoning
     pub fn execution_thinking(channel_id: i64, execution_id: &str, text: &str) -> Self {
         Self::new(
-            "execution.thinking",
+            EventType::ExecutionThinking,
             serde_json::json!({
                 "channel_id": channel_id,
                 "execution_id": execution_id,
@@ -226,14 +315,17 @@ impl GatewayEvent {
     }
 
     /// Task started (tool, sub-agent, etc.)
-    pub fn task_started(task: &ExecutionTask) -> Self {
+    pub fn task_started(task: &ExecutionTask, execution_id: &str) -> Self {
         Self::new(
-            "execution.task_started",
+            EventType::ExecutionTaskStarted,
             serde_json::json!({
                 "id": task.id,
+                "execution_id": execution_id,
                 "parent_id": task.parent_id,
+                "parent_task_id": task.parent_id,  // Alias for frontend compatibility
                 "channel_id": task.channel_id,
                 "type": task.task_type.to_string(),
+                "name": task.description,  // Frontend expects 'name' field
                 "description": task.description,
                 "active_form": task.active_form,
                 "status": task.status.to_string()
@@ -244,7 +336,7 @@ impl GatewayEvent {
     /// Task metrics updated
     pub fn task_updated(task_id: &str, channel_id: i64, metrics: &TaskMetrics) -> Self {
         Self::new(
-            "execution.task_updated",
+            EventType::ExecutionTaskUpdated,
             serde_json::json!({
                 "task_id": task_id,
                 "channel_id": channel_id,
@@ -261,7 +353,7 @@ impl GatewayEvent {
     /// Task completed
     pub fn task_completed(task_id: &str, channel_id: i64, status: &str, metrics: &TaskMetrics) -> Self {
         Self::new(
-            "execution.task_completed",
+            EventType::ExecutionTaskCompleted,
             serde_json::json!({
                 "task_id": task_id,
                 "channel_id": channel_id,
@@ -279,7 +371,7 @@ impl GatewayEvent {
     /// Execution completed
     pub fn execution_completed(channel_id: i64, execution_id: &str, total_metrics: &TaskMetrics) -> Self {
         Self::new(
-            "execution.completed",
+            EventType::ExecutionCompleted,
             serde_json::json!({
                 "channel_id": channel_id,
                 "execution_id": execution_id,
@@ -292,9 +384,112 @@ impl GatewayEvent {
         )
     }
 
+    // =====================================================
+    // Confirmation Events
+    // =====================================================
+
+    /// Confirmation required for a tool execution
+    pub fn confirmation_required(
+        channel_id: i64,
+        confirmation_id: &str,
+        tool_name: &str,
+        description: &str,
+        parameters: &Value,
+    ) -> Self {
+        Self::new(
+            EventType::ConfirmationRequired,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "confirmation_id": confirmation_id,
+                "tool_name": tool_name,
+                "description": description,
+                "parameters": parameters,
+                "instructions": "Type /confirm to execute or /cancel to abort",
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+    }
+
+    /// Confirmation approved and tool executing
+    pub fn confirmation_approved(channel_id: i64, confirmation_id: &str, tool_name: &str) -> Self {
+        Self::new(
+            EventType::ConfirmationApproved,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "confirmation_id": confirmation_id,
+                "tool_name": tool_name,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+    }
+
+    /// Confirmation rejected by user
+    pub fn confirmation_rejected(channel_id: i64, confirmation_id: &str, tool_name: &str) -> Self {
+        Self::new(
+            EventType::ConfirmationRejected,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "confirmation_id": confirmation_id,
+                "tool_name": tool_name,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+    }
+
+    /// Confirmation expired
+    pub fn confirmation_expired(channel_id: i64, confirmation_id: &str, tool_name: &str) -> Self {
+        Self::new(
+            EventType::ConfirmationExpired,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "confirmation_id": confirmation_id,
+                "tool_name": tool_name,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+    }
+
     /// Custom event with arbitrary event name and data
     pub fn custom(event: &str, data: Value) -> Self {
         Self::new(event, data)
+    }
+
+    /// Transaction pending - broadcast when tx is sent but not yet mined
+    pub fn tx_pending(
+        channel_id: i64,
+        tx_hash: &str,
+        network: &str,
+        explorer_url: &str,
+    ) -> Self {
+        Self::new(
+            EventType::TxPending,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "tx_hash": tx_hash,
+                "network": network,
+                "explorer_url": explorer_url,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+    }
+
+    /// Transaction confirmed - broadcast when tx is mined
+    pub fn tx_confirmed(
+        channel_id: i64,
+        tx_hash: &str,
+        network: &str,
+        status: &str,
+    ) -> Self {
+        Self::new(
+            EventType::TxConfirmed,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "tx_hash": tx_hash,
+                "network": network,
+                "status": status,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
     }
 
     /// x402 payment made
@@ -307,7 +502,7 @@ impl GatewayEvent {
         resource: Option<&str>,
     ) -> Self {
         Self::new(
-            "x402.payment",
+            EventType::X402Payment,
             serde_json::json!({
                 "channel_id": channel_id,
                 "amount": amount,
