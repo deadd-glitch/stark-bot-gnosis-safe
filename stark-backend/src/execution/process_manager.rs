@@ -247,7 +247,7 @@ impl ProcessManager {
         mut child: Child,
         process_id: String,
         channel_id: i64,
-        processes: DashMap<String, ProcessHandle>,
+        processes: Arc<DashMap<String, ProcessHandle>>,
         broadcaster: Arc<EventBroadcaster>,
         mut kill_rx: mpsc::Receiver<()>,
         _permit: tokio::sync::OwnedSemaphorePermit,
@@ -466,8 +466,9 @@ impl ProcessManager {
         completed.sort_by(|a, b| a.1.cmp(&b.1));
 
         // Remove oldest entries beyond keep_count
-        if completed.len() > keep_count {
-            for (id, _) in completed.into_iter().take(completed.len() - keep_count) {
+        let remove_count = completed.len().saturating_sub(keep_count);
+        if remove_count > 0 {
+            for (id, _) in completed.into_iter().take(remove_count) {
                 self.processes.remove(&id);
             }
         }
