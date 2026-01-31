@@ -31,7 +31,7 @@ pub enum ToolGroup {
     Exec,
     /// Messaging tools - agent_send, etc.
     Messaging,
-    /// Social/Marketing tools - twitter, scheduling, etc.
+    /// Social/Marketing tools - moltx, scheduling, etc.
     Social,
     /// Memory tools - long-term memory storage and retrieval
     Memory,
@@ -83,7 +83,7 @@ impl ToolGroup {
             "development" | "dev" | "code" => Some(ToolGroup::Development),
             "exec" => Some(ToolGroup::Exec),
             "messaging" => Some(ToolGroup::Messaging),
-            "social" | "marketing" | "twitter" => Some(ToolGroup::Social),
+            "social" | "marketing" | "moltx" => Some(ToolGroup::Social),
             "memory" => Some(ToolGroup::Memory),
             _ => None,
         }
