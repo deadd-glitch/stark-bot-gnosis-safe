@@ -1,5 +1,5 @@
 use crate::ai::{
-    multi_agent::{types::AgentSubtype, Orchestrator, ProcessResult as OrchestratorResult, SubAgentManager},
+    multi_agent::{types::{AgentSubtype, AgentMode}, Orchestrator, ProcessResult as OrchestratorResult, SubAgentManager},
     AiClient, ArchetypeId, ArchetypeRegistry, AiResponse, Message, MessageRole, ModelArchetype,
     ThinkingLevel, ToolCall, ToolHistoryEntry, ToolResponse,
 };
@@ -124,6 +124,8 @@ pub struct MessageDispatcher {
     subagent_manager: Option<Arc<SubAgentManager>>,
     /// Skill registry for managing skills
     skill_registry: Option<Arc<crate::skills::SkillRegistry>>,
+    /// Hook manager for lifecycle events
+    hook_manager: Option<Arc<crate::hooks::HookManager>>,
 }
 
 impl MessageDispatcher {
@@ -188,7 +190,14 @@ impl MessageDispatcher {
             memory_config,
             subagent_manager: Some(subagent_manager),
             skill_registry,
+            hook_manager: None,
         }
+    }
+
+    /// Set the hook manager for lifecycle events
+    pub fn with_hook_manager(mut self, hook_manager: Arc<crate::hooks::HookManager>) -> Self {
+        self.hook_manager = Some(hook_manager);
+        self
     }
 
     /// Create a dispatcher without tool support (for backwards compatibility)
@@ -211,6 +220,7 @@ impl MessageDispatcher {
             memory_config,
             subagent_manager: None, // No tools = no subagent support
             skill_registry: None,   // No skills without tools
+            hook_manager: None,     // No hooks without explicit setup
         }
     }
 
@@ -921,6 +931,45 @@ impl MessageDispatcher {
             serde_json::json!([]), // Empty tasks array
             stats_json,
         ));
+
+        // Also broadcast task queue update if there are tasks
+        if !context.task_queue.is_empty() {
+            let current_task_id = context.task_queue.current_task().map(|t| t.id);
+            self.broadcaster.broadcast(GatewayEvent::task_queue_update(
+                channel_id,
+                &context.task_queue.tasks,
+                current_task_id,
+            ));
+        }
+    }
+
+    /// Broadcast task queue update (full queue state)
+    fn broadcast_task_queue_update(&self, channel_id: i64, orchestrator: &Orchestrator) {
+        let task_queue = orchestrator.task_queue();
+        let current_task_id = task_queue.current_task().map(|t| t.id);
+        self.broadcaster.broadcast(GatewayEvent::task_queue_update(
+            channel_id,
+            &task_queue.tasks,
+            current_task_id,
+        ));
+    }
+
+    /// Broadcast task status change
+    fn broadcast_task_status_change(&self, channel_id: i64, task_id: u32, status: &str, description: &str) {
+        self.broadcaster.broadcast(GatewayEvent::task_status_change(
+            channel_id,
+            task_id,
+            status,
+            description,
+        ));
+    }
+
+    /// Broadcast session complete
+    fn broadcast_session_complete(&self, channel_id: i64, session_id: i64) {
+        self.broadcaster.broadcast(GatewayEvent::session_complete(
+            channel_id,
+            session_id,
+        ));
     }
 
     /// Generate response using native API tool calling with multi-agent orchestration
@@ -974,6 +1023,22 @@ impl MessageDispatcher {
                 orchestrator.current_mode()
             );
 
+            // === DETERMINE TOOLS FOR CURRENT MODE ===
+            // In TaskPlanner mode (first iteration), use only define_tasks tool
+            let current_tools = if orchestrator.current_mode() == AgentMode::TaskPlanner && !orchestrator.context().planner_completed {
+                log::info!("[ORCHESTRATED_LOOP] Using TaskPlanner mode tools (define_tasks only)");
+                // Update conversation with planner prompt
+                if let Some(system_msg) = conversation.first_mut() {
+                    if system_msg.role == MessageRole::System {
+                        let planner_prompt = orchestrator.get_planner_prompt();
+                        system_msg.content = planner_prompt;
+                    }
+                }
+                crate::ai::multi_agent::tools::get_planner_tools()
+            } else {
+                tools.clone()
+            };
+
             // Emit an iteration task for visibility (after first iteration)
             if iterations > 1 {
                 if let Some(ref exec_id) = self.execution_tracker.get_execution_id(original_message.channel_id) {
@@ -998,6 +1063,62 @@ impl MessageDispatcher {
             if iterations > max_tool_iterations {
                 log::warn!("Orchestrated tool loop exceeded max iterations ({})", max_tool_iterations);
                 break;
+            }
+
+            // === TASK PLANNER MODE (first iteration, planner not yet completed) ===
+            // If planner just completed (define_tasks was called), pop first task and continue
+            if orchestrator.context().planner_completed && orchestrator.context().task_queue.current_task().is_none() {
+                if let Some(first_task) = orchestrator.pop_next_task() {
+                    log::info!(
+                        "[ORCHESTRATED_LOOP] Starting first task: {} - {}",
+                        first_task.id,
+                        first_task.description
+                    );
+                    self.broadcast_task_status_change(
+                        original_message.channel_id,
+                        first_task.id,
+                        "in_progress",
+                        &first_task.description,
+                    );
+                    // Broadcast full task queue update
+                    self.broadcast_task_queue_update(original_message.channel_id, orchestrator);
+
+                    // Broadcast mode change to assistant
+                    self.broadcaster.broadcast(GatewayEvent::agent_mode_change(
+                        original_message.channel_id,
+                        "assistant",
+                        "Assistant",
+                        Some("Executing tasks"),
+                    ));
+
+                    // Update tools for assistant mode
+                    let subtype = orchestrator.current_subtype();
+                    tools = self.tool_registry.get_tool_definitions_for_subtype(tool_config, subtype);
+                    if let Some(skill_tool) = self.create_skill_tool_definition_for_subtype(subtype) {
+                        tools.push(skill_tool);
+                    }
+                    tools.extend(orchestrator.get_mode_tools());
+
+                    // Broadcast toolset update
+                    self.broadcast_toolset_update(
+                        original_message.channel_id,
+                        "assistant",
+                        subtype.as_str(),
+                        &tools,
+                    );
+
+                    // Update system prompt for new mode with current task
+                    if let Some(system_msg) = conversation.first_mut() {
+                        if system_msg.role == MessageRole::System {
+                            let orchestrator_prompt = orchestrator.get_system_prompt();
+                            system_msg.content = format!(
+                                "{}\n\n---\n\n{}",
+                                orchestrator_prompt,
+                                archetype.enhance_system_prompt(&messages[0].content, &tools)
+                            );
+                        }
+                    }
+                }
             }
 
             // Check for forced mode transition
@@ -1076,7 +1197,7 @@ impl MessageDispatcher {
                 &client,
                 conversation.clone(),
                 tool_history.clone(),
-                tools.clone(),
+                current_tools.clone(),
                 original_message.channel_id,
             ).await?;
 
@@ -1373,15 +1494,55 @@ impl MessageDispatcher {
                                 user_question_content = result.content.clone();
                                 log::info!("[ORCHESTRATED_LOOP] Tool requires user response, will break after processing");
                             }
-                            // Check if task_fully_completed was called - agent signals it's done
+                            // Check if task_fully_completed was called - agent signals it's done with current task
                             if metadata.get("task_fully_completed").and_then(|v| v.as_bool()).unwrap_or(false) {
-                                orchestrator_complete = true;
-                                if let Some(summary) = metadata.get("summary").and_then(|v| v.as_str()) {
-                                    final_summary = summary.to_string();
-                                } else {
-                                    final_summary = result.content.clone();
+                                let summary = metadata.get("summary")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or(&result.content)
+                                    .to_string();
+
+                                // Mark current task as completed and broadcast
+                                if let Some(completed_task_id) = orchestrator.complete_current_task() {
+                                    log::info!("[ORCHESTRATED_LOOP] Task {} completed", completed_task_id);
+                                    self.broadcast_task_status_change(
+                                        original_message.channel_id,
+                                        completed_task_id,
+                                        "completed",
+                                        &summary,
+                                    );
                                 }
-                                log::info!("[ORCHESTRATED_LOOP] Task fully completed signal received");
+
+                                // Check if all tasks are complete
+                                if orchestrator.all_tasks_complete() {
+                                    log::info!("[ORCHESTRATED_LOOP] All tasks complete, session done");
+                                    orchestrator_complete = true;
+                                    final_summary = summary;
+
+                                    // Mark session as complete in database
+                                    if let Err(e) = self.db.update_session_completion_status(session_id, "complete") {
+                                        log::error!("[ORCHESTRATED_LOOP] Failed to update session completion status: {}", e);
+                                    }
+
+                                    // Broadcast session complete event
+                                    self.broadcast_session_complete(original_message.channel_id, session_id);
+                                } else {
+                                    // Pop next task and broadcast
+                                    if let Some(next_task) = orchestrator.pop_next_task() {
+                                        log::info!(
+                                            "[ORCHESTRATED_LOOP] Starting next task: {} - {}",
+                                            next_task.id,
+                                            next_task.description
+                                        );
+                                        self.broadcast_task_status_change(
+                                            original_message.channel_id,
+                                            next_task.id,
+                                            "in_progress",
+                                            &next_task.description,
+                                        );
+                                        // Broadcast updated queue
+                                        self.broadcast_task_queue_update(original_message.channel_id, orchestrator);
+                                    }
+                                }
                             }
                         }
 
@@ -1392,6 +1553,22 @@ impl MessageDispatcher {
                             0,
                             &result.content,
                         ));
+
+                        // Execute AfterToolCall hooks (for auto-memory, etc.)
+                        if let Some(hook_manager) = &self.hook_manager {
+                            use crate::hooks::{HookContext, HookEvent, HookResult};
+                            let mut hook_context = HookContext::new(HookEvent::AfterToolCall)
+                                .with_channel(original_message.channel_id, Some(session_id))
+                                .with_tool(call.name.clone(), call.arguments.clone())
+                                .with_tool_result(serde_json::json!({
+                                    "success": result.success,
+                                    "content": result.content,
+                                }));
+                            let hook_result = hook_manager.execute(HookEvent::AfterToolCall, &mut hook_context).await;
+                            if let HookResult::Error(e) = hook_result {
+                                log::warn!("Hook execution failed for tool '{}': {}", call.name, e);
+                            }
+                        }
 
                         // Save tool result to session
                         let tool_result_content = format!(
@@ -2233,6 +2410,22 @@ impl MessageDispatcher {
                 duration_ms,
                 result.success
             );
+
+            // Execute AfterToolCall hooks
+            if let Some(hook_manager) = &self.hook_manager {
+                use crate::hooks::{HookContext, HookEvent, HookResult};
+                let mut hook_context = HookContext::new(HookEvent::AfterToolCall)
+                    .with_channel(channel_id, Some(session_id))
+                    .with_tool(call.name.clone(), call.arguments.clone())
+                    .with_tool_result(serde_json::json!({
+                        "success": result.success,
+                        "content": result.content,
+                    }));
+                let hook_result = hook_manager.execute(HookEvent::AfterToolCall, &mut hook_context).await;
+                if let HookResult::Error(e) = hook_result {
+                    log::warn!("Hook execution failed for tool '{}': {}", call.name, e);
+                }
+            }
 
             // Create tool response
             responses.push(if result.success {

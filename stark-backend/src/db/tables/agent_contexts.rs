@@ -3,7 +3,7 @@
 //! Stores AgentContext between messages so the agent can continue
 //! across a multi-turn conversation.
 
-use crate::ai::multi_agent::types::{ActiveSkill, AgentContext, AgentMode, AgentSubtype};
+use crate::ai::multi_agent::types::{ActiveSkill, AgentContext, AgentMode, AgentSubtype, TaskQueue};
 use crate::db::Database;
 use chrono::Utc;
 use rusqlite::{params, Result as SqliteResult};
@@ -58,6 +58,8 @@ impl Database {
                 actual_tool_calls: 0,      // Reset on load
                 no_tool_warnings: 0,       // Reset on load
                 waiting_for_user_context: None, // Reset on load
+                task_queue: TaskQueue::default(), // Reset on load
+                planner_completed: false,  // Reset on load
             })
         });
 

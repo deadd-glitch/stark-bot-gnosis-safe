@@ -261,6 +261,8 @@ impl Database {
         let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN compaction_id INTEGER", []);
         // Phase 1: Add last_flush_at for pre-compaction memory flush tracking
         let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN last_flush_at TEXT", []);
+        // Task planner: Add completion_status column
+        let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN completion_status TEXT NOT NULL DEFAULT 'active'", []);
 
         // Session messages table - conversation transcripts
         conn.execute(

@@ -198,6 +198,70 @@ async fn update_reset_policy(
     }
 }
 
+/// Force delete a session and cancel any running agentic loops
+async fn delete_session(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+    let session_id = path.into_inner();
+
+    // First get the session to find its channel_id
+    let session = match data.db.get_chat_session(session_id) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(serde_json::json!({
+                "error": "Session not found"
+            }));
+        }
+        Err(e) => {
+            log::error!("Failed to get session for deletion: {}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }));
+        }
+    };
+
+    let channel_id = session.channel_id;
+
+    // Cancel all running subagents/agentic loops for this channel
+    let cancelled_agents = if let Some(subagent_manager) = data.dispatcher.subagent_manager() {
+        let count = subagent_manager.cancel_all_for_channel(channel_id);
+        if count > 0 {
+            log::info!(
+                "Force delete: Cancelled {} running agent(s) for channel {} (session {})",
+                count,
+                channel_id,
+                session_id
+            );
+        }
+        count
+    } else {
+        0
+    };
+
+    // Now delete the session
+    match data.db.delete_chat_session(session_id) {
+        Ok(true) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "message": "Session deleted",
+            "cancelled_agents": cancelled_agents
+        })),
+        Ok(false) => HttpResponse::NotFound().json(serde_json::json!({
+            "error": "Session not found"
+        })),
+        Err(e) => {
+            log::error!("Failed to delete session: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }))
+        }
+    }
+}
+
 /// Get session transcript (message history)
 #[derive(Deserialize)]
 struct TranscriptQuery {
@@ -245,6 +309,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("", web::get().to(list_sessions))
             .route("", web::post().to(get_or_create_session))
             .route("/{id}", web::get().to(get_session))
+            .route("/{id}", web::delete().to(delete_session))
             .route("/{id}/reset", web::post().to(reset_session))
             .route("/{id}/policy", web::put().to(update_reset_policy))
             .route("/{id}/transcript", web::get().to(get_transcript)),

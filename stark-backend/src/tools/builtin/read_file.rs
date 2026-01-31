@@ -1,3 +1,4 @@
+use crate::config::journal_dir;
 use crate::tools::registry::Tool;
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
@@ -138,19 +139,26 @@ impl Tool for ReadFileTool {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-            // Resolve the path
+            // Get journal directory
+            let journal = PathBuf::from(journal_dir());
+
+            // Resolve the path - check if it starts with "journal/" to use journal dir
             let requested_path = Path::new(&params.path);
-            let full_path = if requested_path.is_absolute() {
-                requested_path.to_path_buf()
+            let (full_path, base_dir) = if params.path.starts_with("journal/") || params.path == "journal" {
+                // Strip "journal/" prefix and use journal directory
+                let relative = params.path.strip_prefix("journal/").unwrap_or(&params.path);
+                (journal.join(relative), journal.clone())
+            } else if requested_path.is_absolute() {
+                (requested_path.to_path_buf(), workspace.clone())
             } else {
-                workspace.join(requested_path)
+                (workspace.join(requested_path), workspace.clone())
             };
 
             // Canonicalize paths for comparison
-            let canonical_workspace = match workspace.canonicalize() {
+            let canonical_base = match base_dir.canonicalize() {
                 Ok(p) => p,
                 Err(e) => {
-                    return ToolResult::error(format!("Cannot resolve workspace directory: {}", e))
+                    return ToolResult::error(format!("Cannot resolve base directory: {}", e))
                 }
             };
 
@@ -159,10 +167,10 @@ impl Tool for ReadFileTool {
                 Err(e) => return ToolResult::error(format!("Cannot resolve file path: {}", e)),
             };
 
-            // Security check: ensure path is within workspace
-            if !canonical_path.starts_with(&canonical_workspace) {
+            // Security check: ensure path is within allowed directory (workspace or journal)
+            if !canonical_path.starts_with(&canonical_base) {
                 return ToolResult::error(format!(
-                    "Access denied: path '{}' is outside the workspace directory",
+                    "Access denied: path '{}' is outside the allowed directory",
                     params.path
                 ));
             }

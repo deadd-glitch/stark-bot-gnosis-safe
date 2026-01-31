@@ -29,6 +29,7 @@ use config::Config;
 use db::Database;
 use execution::ExecutionTracker;
 use gateway::{events::EventBroadcaster, Gateway};
+use hooks::{HookManager, builtin::AutoMemoryHook};
 use scheduler::{Scheduler, SchedulerConfig};
 use skills::SkillRegistry;
 use tools::ToolRegistry;
@@ -44,6 +45,7 @@ pub struct AppState {
     pub scheduler: Arc<Scheduler>,
     pub channel_manager: Arc<ChannelManager>,
     pub broadcaster: Arc<EventBroadcaster>,
+    pub hook_manager: Arc<HookManager>,
 }
 
 /// SPA fallback handler - serves index.html for client-side routing
@@ -113,16 +115,24 @@ async fn main() -> std::io::Result<()> {
     log::info!("Initializing execution tracker");
     let execution_tracker = Arc::new(ExecutionTracker::new(gateway.broadcaster().clone()));
 
+    // Initialize Hook Manager with auto-memory hook
+    log::info!("Initializing hook manager");
+    let hook_manager = Arc::new(HookManager::new());
+    hook_manager.register(Arc::new(AutoMemoryHook::new(db.clone())));
+    log::info!("Registered {} hooks", hook_manager.hook_count());
+
     // Create the shared MessageDispatcher for all message processing
     log::info!("Initializing message dispatcher");
-    let dispatcher = Arc::new(MessageDispatcher::new_with_wallet_and_skills(
-        db.clone(),
-        gateway.broadcaster().clone(),
-        tool_registry.clone(),
-        execution_tracker.clone(),
-        config.burner_wallet_private_key.clone(),
-        Some(skill_registry.clone()),
-    ));
+    let dispatcher = Arc::new(
+        MessageDispatcher::new_with_wallet_and_skills(
+            db.clone(),
+            gateway.broadcaster().clone(),
+            tool_registry.clone(),
+            execution_tracker.clone(),
+            config.burner_wallet_private_key.clone(),
+            Some(skill_registry.clone()),
+        ).with_hook_manager(hook_manager.clone())
+    );
 
     // Get broadcaster and channel_manager for the /ws route
     let broadcaster = gateway.broadcaster();
@@ -177,6 +187,7 @@ async fn main() -> std::io::Result<()> {
     let sched = scheduler.clone();
     let bcast = broadcaster.clone();
     let chan_mgr = channel_manager.clone();
+    let hook_mgr = hook_manager.clone();
     let frontend_dist = frontend_dist.to_string();
 
     HttpServer::new(move || {
@@ -198,6 +209,7 @@ async fn main() -> std::io::Result<()> {
                 scheduler: Arc::clone(&sched),
                 channel_manager: Arc::clone(&chan_mgr),
                 broadcaster: Arc::clone(&bcast),
+                hook_manager: Arc::clone(&hook_mgr),
             }))
             .app_data(web::Data::new(Arc::clone(&sched)))
             // WebSocket data for /ws route
@@ -224,6 +236,7 @@ async fn main() -> std::io::Result<()> {
             .configure(controllers::eip8004::config)
             .configure(controllers::files::config)
             .configure(controllers::intrinsic::config)
+            .configure(controllers::journal::config)
             // WebSocket Gateway route (same port as HTTP, required for single-port platforms)
             .route("/ws", web::get().to(gateway::actix_ws::ws_handler));
 

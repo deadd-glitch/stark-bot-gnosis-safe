@@ -227,8 +227,12 @@ export async function getSessions(): Promise<Array<{
   return apiFetch('/sessions');
 }
 
-export async function deleteSession(id: string): Promise<void> {
-  await apiFetch(`/sessions/${id}`, { method: 'DELETE' });
+export async function deleteSession(id: string): Promise<{
+  success: boolean;
+  message: string;
+  cancelled_agents?: number;
+}> {
+  return apiFetch(`/sessions/${id}`, { method: 'DELETE' });
 }
 
 // Get or create a session by channel type and ID
@@ -1006,4 +1010,47 @@ export async function writeIntrinsicFile(name: string, content: string): Promise
     method: 'PUT',
     body: JSON.stringify({ content }),
   });
+}
+
+// Journal API
+export interface JournalEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  modified?: string;
+}
+
+export interface ListJournalResponse {
+  success: boolean;
+  path: string;
+  entries: JournalEntry[];
+  error?: string;
+}
+
+export interface ReadJournalResponse {
+  success: boolean;
+  path: string;
+  content?: string;
+  size?: number;
+  error?: string;
+}
+
+export interface JournalInfoResponse {
+  success: boolean;
+  journal_path: string;
+  exists: boolean;
+}
+
+export async function listJournal(path?: string): Promise<ListJournalResponse> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : '';
+  return apiFetch(`/journal${query}`);
+}
+
+export async function readJournalFile(path: string): Promise<ReadJournalResponse> {
+  return apiFetch(`/journal/read?path=${encodeURIComponent(path)}`);
+}
+
+export async function getJournalInfo(): Promise<JournalInfoResponse> {
+  return apiFetch('/journal/info');
 }

@@ -175,6 +175,38 @@ export interface Session {
   context_tokens?: number;
   max_context_tokens?: number;
   compaction_id?: number;
+  // Completion status
+  completion_status?: 'active' | 'complete';
+}
+
+// Task Planner types
+export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+
+export interface PlannerTask {
+  id: number;
+  description: string;
+  status: TaskStatus;
+}
+
+export interface TaskQueueUpdateEvent {
+  channel_id: number;
+  tasks: PlannerTask[];
+  current_task_id?: number;
+  timestamp: string;
+}
+
+export interface TaskStatusChangeEvent {
+  channel_id: number;
+  task_id: number;
+  status: TaskStatus;
+  description: string;
+  timestamp: string;
+}
+
+export interface SessionCompleteEvent {
+  channel_id: number;
+  session_id: number;
+  timestamp: string;
 }
 
 export type MemoryType = 'daily_log' | 'long_term' | 'session_summary' | 'compaction';

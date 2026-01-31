@@ -19,6 +19,7 @@ import {
   DollarSign,
   Shield,
   Sparkles,
+  BookOpen,
 } from 'lucide-react';
 import NavItem from './NavItem';
 import { useAuth } from '@/hooks/useAuth';
@@ -63,8 +64,6 @@ export default function Sidebar() {
           <NavItem to="/skills" icon={Zap} label="Skills" />
           <NavItem to="/scheduling" icon={Clock} label="Scheduling" />
           <NavItem to="/api-keys" icon={Key} label="API Keys" />
-          <NavItem to="/payments" icon={DollarSign} label="Payments" />
-          <NavItem to="/eip8004" icon={Shield} label="EIP-8004" />
         </div>
 
         {/* Data Section */}
@@ -77,6 +76,7 @@ export default function Sidebar() {
           <NavItem to="/identities" icon={Users} label="Identities" />
           <NavItem to="/files" icon={FolderOpen} label="Files" />
           <NavItem to="/system-files" icon={Sparkles} label="System Files" />
+          <NavItem to="/journal" icon={BookOpen} label="Journal" />
         </div>
 
         {/* Developer Section */}
@@ -86,6 +86,8 @@ export default function Sidebar() {
           </p>
           <NavItem to="/logs" icon={ScrollText} label="Live Logs" />
           <NavItem to="/debug" icon={Bug} label="Debug" />
+          <NavItem to="/payments" icon={DollarSign} label="Payments" />
+          <NavItem to="/eip8004" icon={Shield} label="EIP-8004" />
         </div>
       </nav>
 

@@ -11,6 +11,7 @@ interface Session {
   created_at: string;
   updated_at: string;
   message_count?: number;
+  completion_status?: 'active' | 'complete';
 }
 
 export default function Sessions() {
@@ -20,6 +21,7 @@ export default function Sessions() {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     loadSessions();
@@ -57,11 +59,33 @@ export default function Sessions() {
 
   const handleDelete = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent triggering the card click
-    if (!confirm('Are you sure you want to delete this session?')) return;
+
+    const confirmed = confirm(
+      'Force Delete Session?\n\n' +
+      'This will:\n' +
+      '• Delete the session and all messages\n' +
+      '• Cancel any running AI agents/tasks for this session\n' +
+      '• Stop any cron jobs using this session\n\n' +
+      'This action cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    setError(null);
+    setSuccessMessage(null);
 
     try {
-      await deleteSession(String(id));
+      const result = await deleteSession(String(id));
       setSessions((prev) => prev.filter((s) => s.id !== id));
+
+      // Show success message with cancelled agents count
+      if (result.cancelled_agents && result.cancelled_agents > 0) {
+        setSuccessMessage(`Session deleted. Cancelled ${result.cancelled_agents} running agent(s).`);
+      } else {
+        setSuccessMessage('Session deleted successfully.');
+      }
+
+      // Auto-hide success message after 5 seconds
+      setTimeout(() => setSuccessMessage(null), 5000);
     } catch (err) {
       setError('Failed to delete session');
     }
@@ -261,6 +285,13 @@ export default function Sessions() {
         </div>
       )}
 
+      {successMessage && (
+        <div className="mb-6 bg-green-500/20 border border-green-500/50 text-green-400 px-4 py-3 rounded-lg flex items-center gap-2">
+          <CheckCircle className="w-5 h-5" />
+          {successMessage}
+        </div>
+      )}
+
       {sessions.length > 0 ? (
         <div className="space-y-3">
           {sessions.map((session) => (
@@ -286,6 +317,12 @@ export default function Sessions() {
                         <span className="text-xs font-mono px-2 py-0.5 bg-slate-700/50 text-slate-300 rounded">
                           {session.id.toString(16).padStart(8, '0')}
                         </span>
+                        {session.completion_status === 'complete' && (
+                          <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-400 rounded-full flex items-center gap-1">
+                            <CheckCircle className="w-3 h-3" />
+                            Complete
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-4 mt-1 text-sm text-slate-400">
                         <span>Last active: {formatShortDate(session.updated_at)}</span>
@@ -304,6 +341,7 @@ export default function Sessions() {
                       size="sm"
                       onClick={(e) => handleDelete(session.id, e)}
                       className="text-red-400 hover:text-red-300 hover:bg-red-500/20"
+                      title="Force delete session and cancel running agents"
                     >
                       <Trash2 className="w-4 h-4" />
                     </Button>

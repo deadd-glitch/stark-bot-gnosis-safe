@@ -1,7 +1,7 @@
 //! Simplified orchestrator - manages agent context without mode transitions
 
 use super::tools;
-use super::types::{AgentContext, AgentMode};
+use super::types::{AgentContext, AgentMode, TaskQueue};
 use crate::tools::ToolDefinition;
 use serde_json::Value;
 
@@ -19,7 +19,8 @@ impl Orchestrator {
         Self {
             context: AgentContext {
                 original_request,
-                mode: AgentMode::Assistant,
+                mode: AgentMode::TaskPlanner,
+                planner_completed: false,
                 ..Default::default()
             },
         }
@@ -132,13 +133,36 @@ impl Orchestrator {
         self.context.subtype = subtype;
     }
 
+    /// Get the system prompt for task planner mode
+    pub fn get_planner_prompt(&self) -> String {
+        include_str!("prompts/task_planner.md")
+            .replace("{original_request}", &self.context.original_request)
+    }
+
     /// Get the system prompt
     pub fn get_system_prompt(&self) -> String {
+        // If in task planner mode, return the planner prompt
+        if self.context.mode == AgentMode::TaskPlanner && !self.context.planner_completed {
+            return self.get_planner_prompt();
+        }
+
         let base_prompt = include_str!("prompts/assistant.md");
 
         let mut prompt = base_prompt.to_string();
         prompt.push_str("\n\n---\n\n");
         prompt.push_str(&self.format_context_summary());
+
+        // Inject current task if we have one
+        if let Some(task) = self.context.task_queue.current_task() {
+            let total = self.context.task_queue.total();
+            let completed = self.context.task_queue.completed_count();
+            prompt.push_str(&format!(
+                "\n\n## CURRENT TASK ({}/{})\n\n{}\n\n**IMPORTANT**: Focus on completing this specific task. When done, call `task_fully_completed` with a summary of what you accomplished.",
+                completed + 1,
+                total,
+                task.description
+            ));
+        }
 
         prompt
     }
@@ -225,7 +249,7 @@ impl Orchestrator {
         );
 
         match tool_name {
-            "add_note" => self.handle_add_note(params),
+            "define_tasks" => self.handle_define_tasks(params),
             _ => ProcessResult::Continue,
         }
     }
@@ -249,13 +273,75 @@ impl Orchestrator {
     // Tool handlers
     // =========================================================================
 
-    fn handle_add_note(&mut self, params: &Value) -> ProcessResult {
-        if let Some(note) = params.get("note").and_then(|v| v.as_str()) {
-            self.context.exploration_notes.push(note.to_string());
-            ProcessResult::ToolResult(format!("Note added: {}", note))
+    fn handle_define_tasks(&mut self, params: &Value) -> ProcessResult {
+        if let Some(tasks_array) = params.get("tasks").and_then(|v| v.as_array()) {
+            let task_descriptions: Vec<String> = tasks_array
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+
+            if task_descriptions.is_empty() {
+                return ProcessResult::Error("No valid tasks provided".to_string());
+            }
+
+            log::info!(
+                "[ORCHESTRATOR] Task planner defined {} tasks",
+                task_descriptions.len()
+            );
+
+            // Create the task queue
+            self.context.task_queue = TaskQueue::from_descriptions(task_descriptions.clone());
+
+            // Mark planner as completed and switch to assistant mode
+            self.context.planner_completed = true;
+            self.context.mode = AgentMode::Assistant;
+
+            // Format the task list for the response
+            let task_list = task_descriptions
+                .iter()
+                .enumerate()
+                .map(|(i, t)| format!("{}. {}", i + 1, t))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            ProcessResult::ToolResult(format!(
+                "Tasks defined successfully:\n{}\n\nNow executing task 1...",
+                task_list
+            ))
         } else {
-            ProcessResult::Error("Missing 'note' parameter".to_string())
+            ProcessResult::Error("Missing or invalid 'tasks' parameter".to_string())
         }
+    }
+
+    /// Transition to assistant mode after planner completes
+    pub fn transition_to_assistant(&mut self) {
+        self.context.mode = AgentMode::Assistant;
+        self.context.planner_completed = true;
+    }
+
+    /// Pop the next task from the queue
+    pub fn pop_next_task(&mut self) -> Option<&super::types::PlannerTask> {
+        self.context.task_queue.pop_next()
+    }
+
+    /// Complete the current task
+    pub fn complete_current_task(&mut self) -> Option<u32> {
+        self.context.task_queue.complete_current()
+    }
+
+    /// Check if all tasks are complete
+    pub fn all_tasks_complete(&self) -> bool {
+        self.context.task_queue.all_complete()
+    }
+
+    /// Check if task queue is empty (no tasks defined)
+    pub fn task_queue_is_empty(&self) -> bool {
+        self.context.task_queue.is_empty()
+    }
+
+    /// Get the task queue for broadcasting
+    pub fn task_queue(&self) -> &super::types::TaskQueue {
+        &self.context.task_queue
     }
 }
 

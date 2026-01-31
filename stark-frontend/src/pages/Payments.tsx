@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { DollarSign, Receipt, TrendingUp, ExternalLink, Clock } from 'lucide-react';
 import Card, { CardContent } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -41,8 +41,17 @@ interface SummaryResponse {
 
 export default function Payments() {
   const [filter, setFilter] = useState<'all' | 'with_feedback' | 'without_feedback'>('all');
-  const { data: paymentsData, isLoading: paymentsLoading } = useApi<PaymentsResponse>('/payments');
-  const { data: summaryData, isLoading: summaryLoading } = useApi<SummaryResponse>('/payments/summary');
+  const { data: paymentsData, isLoading: paymentsLoading, refetch: refetchPayments } = useApi<PaymentsResponse>('/payments');
+  const { data: summaryData, isLoading: summaryLoading, refetch: refetchSummary } = useApi<SummaryResponse>('/payments/summary');
+
+  // Poll every 5 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refetchPayments();
+      refetchSummary();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [refetchPayments, refetchSummary]);
 
   const payments = paymentsData?.payments ?? [];
   const summary = summaryData?.summary;
@@ -52,6 +61,23 @@ export default function Payments() {
     if (filter === 'without_feedback') return !p.feedback_submitted;
     return true;
   });
+
+  // Calculate sum of filtered payments
+  const filteredTotal = filteredPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0).toFixed(6);
+
+  // Extract tool name from resource URL when tool_name is null
+  const getToolName = (payment: PaymentInfo): string => {
+    if (payment.tool_name) return payment.tool_name;
+    if (payment.resource) {
+      try {
+        const url = new URL(payment.resource);
+        return url.hostname;
+      } catch {
+        return payment.resource.split('/')[0] || 'Service';
+      }
+    }
+    return 'Service';
+  };
 
   const formatDate = (dateStr: string) => {
     try {
@@ -88,9 +114,11 @@ export default function Payments() {
               </div>
               <div>
                 <p className="text-2xl font-bold text-white">
-                  {summaryLoading ? '...' : `$${summary?.total_usdc_spent ?? '0.00'}`}
+                  {summaryLoading ? '...' : `$${filter === 'all' ? (summary?.total_usdc_spent ?? '0.00') : filteredTotal}`}
                 </p>
-                <p className="text-sm text-slate-400">Total Spent (USDC)</p>
+                <p className="text-sm text-slate-400">
+                  {filter === 'all' ? 'Total Spent (USDC)' : 'Filtered Total (USDC)'}
+                </p>
               </div>
             </div>
           </CardContent>
@@ -200,7 +228,7 @@ export default function Payments() {
                         {formatDate(payment.created_at)}
                       </td>
                       <td className="py-3 px-4">
-                        <span className="text-white font-medium">{payment.tool_name ?? 'Unknown'}</span>
+                        <span className="text-white font-medium">{getToolName(payment)}</span>
                         {payment.resource && (
                           <span className="block text-xs text-slate-500 truncate max-w-[200px]">
                             {payment.resource}

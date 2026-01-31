@@ -65,6 +65,10 @@ pub enum EventType {
     ProcessStarted,    // Background process started
     ProcessOutput,     // Background process output chunk
     ProcessCompleted,  // Background process finished
+    // Task planner events
+    TaskQueueUpdate,    // Full task queue update (on define_tasks, session load)
+    TaskStatusChange,   // Individual task status change
+    SessionComplete,    // Session marked complete (all tasks done)
 }
 
 impl EventType {
@@ -117,6 +121,9 @@ impl EventType {
             Self::ProcessStarted => "process.started",
             Self::ProcessOutput => "process.output",
             Self::ProcessCompleted => "process.completed",
+            Self::TaskQueueUpdate => "task.queue_update",
+            Self::TaskStatusChange => "task.status_change",
+            Self::SessionComplete => "session.complete",
         }
     }
 }
@@ -910,6 +917,69 @@ impl GatewayEvent {
                 "process_id": process_id,
                 "exit_code": exit_code,
                 "duration_ms": duration_ms,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+    }
+
+    // =====================================================
+    // Task Planner Events
+    // =====================================================
+
+    /// Full task queue update - broadcast on define_tasks or session load
+    pub fn task_queue_update(
+        channel_id: i64,
+        tasks: &[crate::ai::multi_agent::types::PlannerTask],
+        current_task_id: Option<u32>,
+    ) -> Self {
+        let tasks_json: Vec<serde_json::Value> = tasks
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "id": t.id,
+                    "description": t.description,
+                    "status": t.status.to_string()
+                })
+            })
+            .collect();
+
+        Self::new(
+            EventType::TaskQueueUpdate,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "tasks": tasks_json,
+                "current_task_id": current_task_id,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+    }
+
+    /// Individual task status change
+    pub fn task_status_change(
+        channel_id: i64,
+        task_id: u32,
+        status: &str,
+        description: &str,
+    ) -> Self {
+        Self::new(
+            EventType::TaskStatusChange,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "task_id": task_id,
+                "status": status,
+                "description": description,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+    }
+
+    /// Session marked complete - all tasks done
+    pub fn session_complete(channel_id: i64, session_id: i64) -> Self {
+        Self::new(
+            EventType::SessionComplete,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "session_id": session_id,
                 "timestamp": chrono::Utc::now().to_rfc3339()
             }),
         )

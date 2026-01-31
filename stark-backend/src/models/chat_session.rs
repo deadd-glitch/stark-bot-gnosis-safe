@@ -103,6 +103,13 @@ pub struct ChatSession {
     pub max_context_tokens: i32,
     /// ID of the compaction memory entry if context has been compacted
     pub compaction_id: Option<i64>,
+    /// Completion status of the session ("active" or "complete")
+    #[serde(default = "default_completion_status")]
+    pub completion_status: String,
+}
+
+fn default_completion_status() -> String {
+    "active".to_string()
 }
 
 /// Request to get or create a chat session
@@ -146,6 +153,8 @@ pub struct ChatSessionResponse {
     pub context_tokens: i32,
     pub max_context_tokens: i32,
     pub compaction_id: Option<i64>,
+    // Completion status
+    pub completion_status: String,
 }
 
 impl From<ChatSession> for ChatSessionResponse {
@@ -169,6 +178,7 @@ impl From<ChatSession> for ChatSessionResponse {
             context_tokens: session.context_tokens,
             max_context_tokens: session.max_context_tokens,
             compaction_id: session.compaction_id,
+            completion_status: session.completion_status,
         }
     }
 }

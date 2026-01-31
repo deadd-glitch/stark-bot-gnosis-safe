@@ -8,6 +8,7 @@ pub mod env_vars {
     pub const DATABASE_URL: &str = "DATABASE_URL";
     pub const WORKSPACE_DIR: &str = "STARK_WORKSPACE_DIR";
     pub const SKILLS_DIR: &str = "STARK_SKILLS_DIR";
+    pub const JOURNAL_DIR: &str = "STARK_JOURNAL_DIR";
     // Memory configuration
     pub const MEMORY_ENABLE_PRE_COMPACTION_FLUSH: &str = "STARK_MEMORY_ENABLE_PRE_COMPACTION_FLUSH";
     pub const MEMORY_ENABLE_ENTITY_EXTRACTION: &str = "STARK_MEMORY_ENABLE_ENTITY_EXTRACTION";
@@ -24,6 +25,7 @@ pub mod defaults {
     pub const DATABASE_URL: &str = "./.db/stark.db";
     pub const WORKSPACE_DIR: &str = "./workspace";
     pub const SKILLS_DIR: &str = "./skills";
+    pub const JOURNAL_DIR: &str = "./journal";
 }
 
 /// Get the workspace directory from environment or default
@@ -34,6 +36,11 @@ pub fn workspace_dir() -> String {
 /// Get the skills directory from environment or default
 pub fn skills_dir() -> String {
     env::var(env_vars::SKILLS_DIR).unwrap_or_else(|_| defaults::SKILLS_DIR.to_string())
+}
+
+/// Get the journal directory from environment or default
+pub fn journal_dir() -> String {
+    env::var(env_vars::JOURNAL_DIR).unwrap_or_else(|_| defaults::JOURNAL_DIR.to_string())
 }
 
 /// Get the burner wallet private key from environment (for tools)

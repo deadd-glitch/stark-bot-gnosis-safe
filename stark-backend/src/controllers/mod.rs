@@ -11,6 +11,7 @@ pub mod gmail;
 pub mod health;
 pub mod identity;
 pub mod intrinsic;
+pub mod journal;
 pub mod memories;
 pub mod payments;
 pub mod sessions;

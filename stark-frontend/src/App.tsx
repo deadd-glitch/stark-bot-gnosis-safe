@@ -14,6 +14,7 @@ import MemoryBrowser from '@/pages/MemoryBrowser';
 import Identities from '@/pages/Identities';
 import FileBrowser from '@/pages/FileBrowser';
 import SystemFiles from '@/pages/SystemFiles';
+import Journal from '@/pages/Journal';
 import Logs from '@/pages/Logs';
 import Debug from '@/pages/Debug';
 import ApiKeys from '@/pages/ApiKeys';
@@ -39,6 +40,7 @@ function App() {
         <Route path="/identities" element={<Identities />} />
         <Route path="/files" element={<FileBrowser />} />
         <Route path="/system-files" element={<SystemFiles />} />
+        <Route path="/journal" element={<Journal />} />
         <Route path="/logs" element={<Logs />} />
         <Route path="/debug" element={<Debug />} />
         <Route path="/payments" element={<Payments />} />

@@ -108,7 +108,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, session_key, agent_id, scope, channel_type, channel_id, platform_chat_id,
              is_active, reset_policy, idle_timeout_minutes, daily_reset_hour,
-             created_at, updated_at, last_activity_at, expires_at, context_tokens, max_context_tokens, compaction_id
+             created_at, updated_at, last_activity_at, expires_at, context_tokens, max_context_tokens, compaction_id, completion_status
              FROM chat_sessions WHERE id = ?1",
         )?;
 
@@ -126,7 +126,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, session_key, agent_id, scope, channel_type, channel_id, platform_chat_id,
              is_active, reset_policy, idle_timeout_minutes, daily_reset_hour,
-             created_at, updated_at, last_activity_at, expires_at, context_tokens, max_context_tokens, compaction_id
+             created_at, updated_at, last_activity_at, expires_at, context_tokens, max_context_tokens, compaction_id, completion_status
              FROM chat_sessions ORDER BY last_activity_at DESC LIMIT 100",
         )?;
 
@@ -145,7 +145,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, session_key, agent_id, scope, channel_type, channel_id, platform_chat_id,
              is_active, reset_policy, idle_timeout_minutes, daily_reset_hour,
-             created_at, updated_at, last_activity_at, expires_at, context_tokens, max_context_tokens, compaction_id
+             created_at, updated_at, last_activity_at, expires_at, context_tokens, max_context_tokens, compaction_id, completion_status
              FROM chat_sessions WHERE session_key = ?1 AND is_active = 1",
         )?;
 
@@ -212,6 +212,25 @@ impl Database {
         self.get_chat_session(new_id).map(|opt| opt.unwrap())
     }
 
+    /// Delete a chat session and all its messages
+    pub fn delete_chat_session(&self, id: i64) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap();
+
+        // Delete agent context for the session
+        conn.execute(
+            "DELETE FROM agent_contexts WHERE session_id = ?1",
+            rusqlite::params![id],
+        )?;
+
+        // Delete the session (messages are cascade deleted via FK constraint)
+        let deleted = conn.execute(
+            "DELETE FROM chat_sessions WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+
+        Ok(deleted > 0)
+    }
+
     /// Update session reset policy
     pub fn update_session_reset_policy(
         &self,
@@ -269,6 +288,7 @@ impl Database {
             context_tokens: row.get(15).unwrap_or(0),
             max_context_tokens: row.get(16).unwrap_or(100000),
             compaction_id: row.get(17).ok(),
+            completion_status: row.get::<_, String>(18).unwrap_or_else(|_| "active".to_string()),
         })
     }
 
@@ -521,5 +541,36 @@ impl Database {
         Ok(flush_str.and_then(|s| {
             chrono::DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))
         }))
+    }
+
+    // ============================================
+    // Completion Status methods (Task Planner)
+    // ============================================
+
+    /// Update the completion status of a session
+    pub fn update_session_completion_status(&self, session_id: i64, status: &str) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE chat_sessions SET completion_status = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![status, &now, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get the completion status of a session
+    pub fn get_session_completion_status(&self, session_id: i64) -> SqliteResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT completion_status FROM chat_sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        ).map(Some).or_else(|e| {
+            if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        })
     }
 }

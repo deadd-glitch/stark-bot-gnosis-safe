@@ -153,7 +153,8 @@ impl Database {
              bm25(memories_fts) as rank
              FROM memories m
              JOIN memories_fts ON m.id = memories_fts.rowid
-             WHERE memories_fts MATCH ?1 AND m.superseded_by IS NULL",
+             WHERE memories_fts MATCH ?1 AND m.superseded_by IS NULL
+             AND (m.expires_at IS NULL OR m.expires_at > datetime('now'))",
         );
 
         let mut conditions: Vec<String> = Vec::new();
@@ -535,28 +536,28 @@ impl Database {
              entity_type, entity_name, confidence, source_type, last_referenced_at,
              superseded_by, superseded_at, valid_from, valid_until, temporal_type
              FROM memories WHERE entity_type = ?1 AND entity_name = ?2 AND identity_id = ?3
-             AND superseded_by IS NULL ORDER BY importance DESC, created_at DESC LIMIT ?4"
+             AND superseded_by IS NULL AND (expires_at IS NULL OR expires_at > datetime('now')) ORDER BY importance DESC, created_at DESC LIMIT ?4"
         } else if entity_name.is_some() {
             "SELECT id, memory_type, content, category, tags, importance, identity_id, session_id,
              source_channel_type, source_message_id, log_date, created_at, updated_at, expires_at,
              entity_type, entity_name, confidence, source_type, last_referenced_at,
              superseded_by, superseded_at, valid_from, valid_until, temporal_type
              FROM memories WHERE entity_type = ?1 AND entity_name = ?2
-             AND superseded_by IS NULL ORDER BY importance DESC, created_at DESC LIMIT ?3"
+             AND superseded_by IS NULL AND (expires_at IS NULL OR expires_at > datetime('now')) ORDER BY importance DESC, created_at DESC LIMIT ?3"
         } else if identity_id.is_some() {
             "SELECT id, memory_type, content, category, tags, importance, identity_id, session_id,
              source_channel_type, source_message_id, log_date, created_at, updated_at, expires_at,
              entity_type, entity_name, confidence, source_type, last_referenced_at,
              superseded_by, superseded_at, valid_from, valid_until, temporal_type
              FROM memories WHERE entity_type = ?1 AND identity_id = ?2
-             AND superseded_by IS NULL ORDER BY importance DESC, created_at DESC LIMIT ?3"
+             AND superseded_by IS NULL AND (expires_at IS NULL OR expires_at > datetime('now')) ORDER BY importance DESC, created_at DESC LIMIT ?3"
         } else {
             "SELECT id, memory_type, content, category, tags, importance, identity_id, session_id,
              source_channel_type, source_message_id, log_date, created_at, updated_at, expires_at,
              entity_type, entity_name, confidence, source_type, last_referenced_at,
              superseded_by, superseded_at, valid_from, valid_until, temporal_type
              FROM memories WHERE entity_type = ?1
-             AND superseded_by IS NULL ORDER BY importance DESC, created_at DESC LIMIT ?2"
+             AND superseded_by IS NULL AND (expires_at IS NULL OR expires_at > datetime('now')) ORDER BY importance DESC, created_at DESC LIMIT ?2"
         };
 
         let mut stmt = conn.prepare(sql)?;

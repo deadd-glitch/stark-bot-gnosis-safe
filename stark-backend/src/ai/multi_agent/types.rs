@@ -4,6 +4,127 @@ use serde::{Deserialize, Serialize};
 
 use crate::tools::types::ToolGroup;
 
+// =====================================================
+// Task Planner Types
+// =====================================================
+
+/// Status of a planner task
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl Default for TaskStatus {
+    fn default() -> Self {
+        TaskStatus::Pending
+    }
+}
+
+impl std::fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TaskStatus::Pending => write!(f, "pending"),
+            TaskStatus::InProgress => write!(f, "in_progress"),
+            TaskStatus::Completed => write!(f, "completed"),
+        }
+    }
+}
+
+/// A task created by the task planner
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannerTask {
+    pub id: u32,
+    pub description: String,
+    pub status: TaskStatus,
+}
+
+impl PlannerTask {
+    pub fn new(id: u32, description: String) -> Self {
+        Self {
+            id,
+            description,
+            status: TaskStatus::Pending,
+        }
+    }
+}
+
+/// Queue of tasks to be executed
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskQueue {
+    pub tasks: Vec<PlannerTask>,
+    pub current_task_idx: Option<usize>,
+}
+
+impl TaskQueue {
+    /// Create a new task queue from a list of task descriptions
+    pub fn from_descriptions(descriptions: Vec<String>) -> Self {
+        let tasks = descriptions
+            .into_iter()
+            .enumerate()
+            .map(|(i, desc)| PlannerTask::new((i + 1) as u32, desc))
+            .collect();
+        Self {
+            tasks,
+            current_task_idx: None,
+        }
+    }
+
+    /// Get the current task being worked on
+    pub fn current_task(&self) -> Option<&PlannerTask> {
+        self.current_task_idx.and_then(|idx| self.tasks.get(idx))
+    }
+
+    /// Get the current task mutably
+    pub fn current_task_mut(&mut self) -> Option<&mut PlannerTask> {
+        self.current_task_idx.and_then(|idx| self.tasks.get_mut(idx))
+    }
+
+    /// Pop the next pending task and mark it as in progress
+    pub fn pop_next(&mut self) -> Option<&PlannerTask> {
+        // Find the first pending task
+        let next_idx = self.tasks.iter().position(|t| t.status == TaskStatus::Pending)?;
+        self.tasks[next_idx].status = TaskStatus::InProgress;
+        self.current_task_idx = Some(next_idx);
+        self.tasks.get(next_idx)
+    }
+
+    /// Mark the current task as completed
+    pub fn complete_current(&mut self) -> Option<u32> {
+        if let Some(idx) = self.current_task_idx {
+            if let Some(task) = self.tasks.get_mut(idx) {
+                task.status = TaskStatus::Completed;
+                let task_id = task.id;
+                self.current_task_idx = None;
+                return Some(task_id);
+            }
+        }
+        None
+    }
+
+    /// Check if all tasks are complete
+    pub fn all_complete(&self) -> bool {
+        !self.tasks.is_empty() && self.tasks.iter().all(|t| t.status == TaskStatus::Completed)
+    }
+
+    /// Get the total number of tasks
+    pub fn total(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Get the number of completed tasks
+    pub fn completed_count(&self) -> usize {
+        self.tasks.iter().filter(|t| t.status == TaskStatus::Completed).count()
+    }
+
+    /// Check if the queue is empty (no tasks defined)
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+}
+
 /// The specialized mode/persona of the agent
 /// Controls which tools and skills are available (acts as a "toolbox")
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -160,23 +281,26 @@ impl std::fmt::Display for AgentSubtype {
     }
 }
 
-/// The current mode of the agent (simplified - single mode)
+/// The current mode of the agent
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentMode {
-    /// Active assistant mode - handles all tasks
+    /// Task planner mode - first iteration only, breaks down request into tasks
+    TaskPlanner,
+    /// Active assistant mode - handles tasks one at a time
     Assistant,
 }
 
 impl Default for AgentMode {
     fn default() -> Self {
-        AgentMode::Assistant
+        AgentMode::TaskPlanner
     }
 }
 
 impl std::fmt::Display for AgentMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            AgentMode::TaskPlanner => write!(f, "task_planner"),
             AgentMode::Assistant => write!(f, "assistant"),
         }
     }
@@ -185,6 +309,7 @@ impl std::fmt::Display for AgentMode {
 impl AgentMode {
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
+            "task_planner" | "taskplanner" | "planner" => Some(AgentMode::TaskPlanner),
             "assistant" | "explore" | "plan" | "perform" | "execute" => Some(AgentMode::Assistant),
             _ => None,
         }
@@ -192,17 +317,18 @@ impl AgentMode {
 
     /// Check if skills are available in this mode
     pub fn allows_skills(&self) -> bool {
-        true // Always allow skills
+        matches!(self, AgentMode::Assistant)
     }
 
     /// Check if action tools (swap, transfer, etc.) are available in this mode
     pub fn allows_action_tools(&self) -> bool {
-        true // Always allow action tools
+        matches!(self, AgentMode::Assistant)
     }
 
     /// Human-readable label for UI display
     pub fn label(&self) -> &'static str {
         match self {
+            AgentMode::TaskPlanner => "Planning",
             AgentMode::Assistant => "Assistant",
         }
     }
@@ -217,7 +343,7 @@ pub struct AgentContext {
     /// Notes gathered during the session
     pub exploration_notes: Vec<String>,
 
-    /// Current mode (always Assistant)
+    /// Current mode (TaskPlanner for first iteration, then Assistant)
     pub mode: AgentMode,
 
     /// Current agent subtype/specialization
@@ -250,6 +376,14 @@ pub struct AgentContext {
     /// so the AI can continue where it left off when the user responds.
     #[serde(default)]
     pub waiting_for_user_context: Option<String>,
+
+    /// Task queue for the current session (populated after planner runs)
+    #[serde(default)]
+    pub task_queue: TaskQueue,
+
+    /// Whether the planner phase has completed
+    #[serde(default)]
+    pub planner_completed: bool,
 }
 
 /// Active skill context that persists across turns
