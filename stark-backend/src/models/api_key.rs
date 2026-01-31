@@ -6,7 +6,7 @@ use crate::controllers::api_keys::get_key_config;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     pub id: i64,
-    pub service_name: String,  // Now stores key names like "GITHUB_TOKEN", "TWITTER_CLIENT_ID"
+    pub service_name: String,  // Stores key names like "GITHUB_TOKEN", "MOLTX_API_KEY"
     #[serde(skip_serializing)]
     pub api_key: String,
     pub created_at: DateTime<Utc>,

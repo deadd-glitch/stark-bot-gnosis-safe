@@ -411,7 +411,7 @@ impl ToolContext {
     }
 
     /// Add an API key to the context by string name (for backwards compatibility)
-    /// Keys are stored by their exact name (e.g., "GITHUB_TOKEN", "TWITTER_CLIENT_ID")
+    /// Keys are stored by their exact name (e.g., "GITHUB_TOKEN", "MOLTX_API_KEY")
     pub fn with_api_key(mut self, key_name: &str, key_value: String) -> Self {
         self.extra.insert(
             format!("api_key_{}", key_name),

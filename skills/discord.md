@@ -14,10 +14,14 @@ requires_tools: [discord, discord_lookup, agent_send]
 
 Use `discord` to manage messages, reactions, threads, polls, and moderation. You can disable groups via `discord.actions.*` (defaults to enabled, except roles/moderation). The tool uses the bot token configured for Clawdbot.
 
+## Default Channel
+
+**If no channel is specified, default to the "general" channel.** Use `discord_lookup` with `action: search_channels` and `query: "general"` to find it if you don't have the channel ID.
+
 ## Inputs to collect
 
 - For reactions: `channelId`, `messageId`, and an `emoji`.
-- For stickers/polls/sendMessage: a `to` target (`channel:<id>` or `user:<id>`). Optional `content` text.
+- For stickers/polls/sendMessage: a `to` target (`channel:<id>` or `user:<id>`). Optional `content` text. **If no channel specified, use "general".**
 - Polls also need a `question` plus 2–10 `answers`.
 - For media: `mediaUrl` with `file:///path` for local files or `https://...` for remote.
 - For emoji uploads: `guildId`, `name`, `mediaUrl`, optional `roleIds` (limit 256KB, PNG/JPG/GIF).
@@ -177,6 +181,8 @@ limit: 20
 ```
 
 ### Send/edit/delete a message
+
+**If the user doesn't specify a channel, default to "general".** Look up the general channel ID first using `discord_lookup` if needed.
 
 ```tool:discord
 action: sendMessage

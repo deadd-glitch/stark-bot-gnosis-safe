@@ -63,7 +63,7 @@ impl AgentSubtype {
                     }
                     AgentSubtype::Secretary => {
                         groups.push(ToolGroup::Messaging); // agent_send
-                        groups.push(ToolGroup::Social);    // twitter, scheduling tools
+                        groups.push(ToolGroup::Social);    // moltx, scheduling tools
                     }
                     AgentSubtype::None => unreachable!(), // Handled above
                 }
@@ -90,7 +90,7 @@ impl AgentSubtype {
                 match self {
                     AgentSubtype::Finance => tags.extend(["crypto", "defi", "transfer", "swap", "finance", "wallet", "token"]),
                     AgentSubtype::CodeEngineer => tags.extend(["development", "git", "testing", "debugging", "review", "code", "github"]),
-                    AgentSubtype::Secretary => tags.extend(["social", "marketing", "messaging", "twitter", "scheduling", "communication", "social-media"]),
+                    AgentSubtype::Secretary => tags.extend(["social", "marketing", "messaging", "moltx", "scheduling", "communication", "social-media"]),
                     AgentSubtype::None => unreachable!(),
                 }
 
@@ -136,7 +136,7 @@ impl AgentSubtype {
             "code_engineer" | "codeengineer" | "code" | "dev" | "developer" | "git" => {
                 Some(AgentSubtype::CodeEngineer)
             }
-            "secretary" | "social" | "marketing" | "messaging" | "twitter" => {
+            "secretary" | "social" | "marketing" | "messaging" | "moltx" => {
                 Some(AgentSubtype::Secretary)
             }
             _ => None,

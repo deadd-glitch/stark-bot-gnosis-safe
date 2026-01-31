@@ -12,8 +12,8 @@ pub enum ApiKeyId {
     GithubToken,
     #[strum(serialize = "BANKR_API_KEY")]
     BankrApiKey,
-    #[strum(serialize = "TWITTER_TOKEN")]
-    TwitterToken,
+    #[strum(serialize = "MOLTX_API_KEY")]
+    MoltxApiKey,
     #[strum(serialize = "DISCORD_BOT_TOKEN")]
     DiscordBotToken,
     #[strum(serialize = "TELEGRAM_BOT_TOKEN")]
@@ -31,7 +31,7 @@ impl ApiKeyId {
         match self {
             Self::GithubToken => "GITHUB_TOKEN",
             Self::BankrApiKey => "BANKR_API_KEY",
-            Self::TwitterToken => "TWITTER_TOKEN",
+            Self::MoltxApiKey => "MOLTX_API_KEY",
             Self::DiscordBotToken => "DISCORD_BOT_TOKEN",
             Self::TelegramBotToken => "TELEGRAM_BOT_TOKEN",
             Self::SlackBotToken => "SLACK_BOT_TOKEN",
@@ -44,7 +44,7 @@ impl ApiKeyId {
         match self {
             Self::GithubToken => Some(&["GH_TOKEN", "GITHUB_TOKEN"]),
             Self::BankrApiKey => Some(&["BANKR_API_KEY"]),
-            Self::TwitterToken => Some(&["TWITTER_TOKEN"]),
+            Self::MoltxApiKey => Some(&["MOLTX_API_KEY"]),
             Self::DiscordBotToken => Some(&["DISCORD_BOT_TOKEN", "DISCORD_TOKEN"]),
             Self::TelegramBotToken => Some(&["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"]),
             Self::SlackBotToken => Some(&["SLACK_BOT_TOKEN", "SLACK_TOKEN"]),
@@ -81,7 +81,7 @@ pub struct KeyConfig {
     pub secret: bool,
 }
 
-/// Configuration for a service group (e.g., "twitter" groups TWITTER_CLIENT_ID and TWITTER_CLIENT_SECRET)
+/// Configuration for a service group (e.g., "github" groups GITHUB_TOKEN)
 #[derive(Debug, Clone, Serialize)]
 pub struct ServiceConfig {
     pub group: &'static str,
@@ -106,17 +106,15 @@ pub fn get_service_configs() -> Vec<ServiceConfig> {
             }],
         },
         ServiceConfig {
-            group: "twitter",
-            label: "Twitter/X",
-            description: "Get a User Access Token from the Developer Portal to post tweets.",
-            url: "https://developer.x.com/en/portal/dashboard",
-            keys: vec![
-                KeyConfig {
-                    name: "TWITTER_TOKEN",
-                    label: "User Access Token",
-                    secret: true,
-                },
-            ],
+            group: "moltx",
+            label: "MoltX",
+            description: "X for agents. Get an API key from moltx.io after registering your agent.",
+            url: "https://moltx.io",
+            keys: vec![KeyConfig {
+                name: "MOLTX_API_KEY",
+                label: "API Key",
+                secret: true,
+            }],
         },
         ServiceConfig {
             group: "bankr",

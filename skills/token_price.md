@@ -121,3 +121,18 @@ curl -s "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies
 - For obscure tokens, search by contract address
 - Cache responses when possible (prices update every 1-2 minutes)
 - Free tier is sufficient for most use cases
+
+## IMPORTANT: Communicating Results
+
+After fetching the price data, you MUST use `say_to_user` to tell the user the results. Format the response clearly:
+
+```
+say_to_user: "Bitcoin is currently $83,876 USD (up 1.26% in 24h)"
+```
+
+Include:
+- The token name and current price
+- 24h change percentage (if available)
+- Any other relevant data the user asked about
+
+Do NOT just call `task_fully_completed` without first telling the user the price via `say_to_user`.

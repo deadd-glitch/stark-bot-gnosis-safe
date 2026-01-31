@@ -47,7 +47,7 @@ impl SetAgentSubtypeTool {
                     You MUST call this tool FIRST based on what the user wants:\n\
                     • 'finance' - For crypto/DeFi: swaps, transfers, balances, token lookups\n\
                     • 'code_engineer' - For coding: edit files, git, grep/glob, run commands\n\
-                    • 'secretary' - For social: Twitter, messaging, scheduling, marketing\n\n\
+                    • 'secretary' - For social: MoltX, messaging, scheduling, marketing\n\n\
                     Choose based on the user's request, then proceed with the appropriate tools.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
@@ -97,8 +97,8 @@ impl SetAgentSubtypeTool {
                 "📱 Secretary toolbox activated.\n\n\
                  Tools now available:\n\
                  • agent_send - Send messages to other channels\n\
-                 • (Social tools for Twitter, scheduling coming soon)\n\n\
-                 Skills: send_tweet, twitter, scheduling"
+                 • (Social tools for MoltX, scheduling coming soon)\n\n\
+                 Skills: moltx, moltbook, scheduling"
                     .to_string()
             }
         }
