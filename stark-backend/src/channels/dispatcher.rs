@@ -991,6 +991,10 @@ impl MessageDispatcher {
     fn broadcast_task_queue_update(&self, channel_id: i64, orchestrator: &Orchestrator) {
         let task_queue = orchestrator.task_queue();
         let current_task_id = task_queue.current_task().map(|t| t.id);
+
+        // Store tasks in execution tracker for API access (page refresh)
+        self.execution_tracker.set_planner_tasks(channel_id, task_queue.tasks.clone());
+
         self.broadcaster.broadcast(GatewayEvent::task_queue_update(
             channel_id,
             &task_queue.tasks,
@@ -1010,6 +1014,9 @@ impl MessageDispatcher {
 
     /// Broadcast session complete
     fn broadcast_session_complete(&self, channel_id: i64, session_id: i64) {
+        // Clear stored planner tasks since session is complete
+        self.execution_tracker.clear_planner_tasks(channel_id);
+
         self.broadcaster.broadcast(GatewayEvent::session_complete(
             channel_id,
             session_id,

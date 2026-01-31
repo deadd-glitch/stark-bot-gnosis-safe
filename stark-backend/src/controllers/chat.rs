@@ -98,6 +98,21 @@ pub struct DeleteTaskResponse {
     pub was_current_task: Option<bool>,
 }
 
+/// Task info for API response
+#[derive(Serialize)]
+pub struct PlannerTaskInfo {
+    pub id: u32,
+    pub description: String,
+    pub status: String,
+}
+
+/// Response for getting planner tasks
+#[derive(Serialize)]
+pub struct GetPlannerTasksResponse {
+    pub success: bool,
+    pub tasks: Vec<PlannerTaskInfo>,
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/api/chat").route(web::post().to(chat)))
         .service(web::resource("/api/chat/stop").route(web::post().to(stop_execution)))
@@ -105,6 +120,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         .service(web::resource("/api/chat/subagents").route(web::get().to(list_subagents)))
         .service(web::resource("/api/chat/subagents/cancel").route(web::post().to(cancel_subagent)))
         // Task management for planner tasks
+        .service(web::resource("/api/chat/tasks").route(web::get().to(get_planner_tasks)))
         .service(web::resource("/api/chat/tasks/{task_id}").route(web::delete().to(delete_task)))
         // Session management for web channel
         .service(web::resource("/api/chat/session").route(web::get().to(get_web_session)))
@@ -457,6 +473,53 @@ async fn cancel_subagent(
             error: Some("Subagent manager not available".to_string()),
         })
     }
+}
+
+/// Get current planner tasks for the web channel
+async fn get_planner_tasks(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> impl Responder {
+    // Validate session token
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim_start_matches("Bearer ").to_string());
+
+    let token = match token {
+        Some(t) => t,
+        None => {
+            return HttpResponse::Unauthorized().json(GetPlannerTasksResponse {
+                success: false,
+                tasks: vec![],
+            });
+        }
+    };
+
+    // Validate the session
+    if state.db.validate_session(&token).ok().flatten().is_none() {
+        return HttpResponse::Unauthorized().json(GetPlannerTasksResponse {
+            success: false,
+            tasks: vec![],
+        });
+    }
+
+    // Get tasks from execution tracker
+    let tasks = state.execution_tracker.get_planner_tasks(WEB_CHANNEL_ID);
+    let task_infos: Vec<PlannerTaskInfo> = tasks
+        .into_iter()
+        .map(|t| PlannerTaskInfo {
+            id: t.id,
+            description: t.description,
+            status: t.status.to_string(),
+        })
+        .collect();
+
+    HttpResponse::Ok().json(GetPlannerTasksResponse {
+        success: true,
+        tasks: task_infos,
+    })
 }
 
 /// Delete a planner task by ID

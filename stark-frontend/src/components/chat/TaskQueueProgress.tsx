@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { CheckCircle, Circle, Loader2, ListChecks, X } from 'lucide-react';
 import clsx from 'clsx';
 import { useGateway } from '@/hooks/useGateway';
-import { deletePlannerTask } from '@/lib/api';
+import { deletePlannerTask, getPlannerTasks } from '@/lib/api';
 import type { PlannerTask, TaskQueueUpdateEvent, TaskStatusChangeEvent } from '@/types';
 
 // Web channel ID - must match backend WEB_CHANNEL_ID
@@ -24,6 +24,34 @@ export default function TaskQueueProgress({ className }: TaskQueueProgressProps)
   const [visible, setVisible] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
   const { on, off } = useGateway();
+  const hasFetchedRef = useRef(false);
+
+  // Fetch tasks on mount (for page refresh)
+  useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
+
+    const fetchTasks = async () => {
+      try {
+        const response = await getPlannerTasks();
+        if (response.success && response.tasks.length > 0) {
+          // Convert API response to PlannerTask format
+          const plannerTasks: PlannerTask[] = response.tasks.map((t) => ({
+            id: t.id,
+            description: t.description,
+            status: t.status as 'pending' | 'in_progress' | 'completed',
+          }));
+          setTasks(plannerTasks);
+          setVisible(true);
+          console.log('[TaskQueueProgress] Loaded tasks from API:', plannerTasks);
+        }
+      } catch (error) {
+        console.error('[TaskQueueProgress] Failed to fetch tasks:', error);
+      }
+    };
+
+    fetchTasks();
+  }, []);
 
   // Handle task deletion
   const handleDeleteTask = useCallback(async (taskId: number, e: React.MouseEvent) => {
@@ -184,23 +212,23 @@ export default function TaskQueueProgress({ className }: TaskQueueProgressProps)
                 {task.id}. {task.description}
               </span>
             </div>
-            {/* Delete button - show on hover, hide for completed tasks */}
+            {/* Delete button - always visible for non-completed tasks */}
             {task.status !== 'completed' && (
               <button
                 onClick={(e) => handleDeleteTask(task.id, e)}
                 disabled={deletingTaskId === task.id}
                 className={clsx(
-                  'shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity',
-                  'hover:bg-red-500/20 hover:text-red-400',
+                  'shrink-0 p-1 rounded transition-colors',
+                  'hover:bg-red-500/20',
                   'focus:outline-none focus:ring-1 focus:ring-red-500/50',
-                  deletingTaskId === task.id && 'opacity-100 cursor-wait'
+                  deletingTaskId === task.id && 'cursor-wait'
                 )}
                 title="Delete task"
               >
                 {deletingTaskId === task.id ? (
-                  <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />
                 ) : (
-                  <X className="w-4 h-4 text-slate-500 hover:text-red-400" />
+                  <X className="w-3.5 h-3.5 text-slate-500 hover:text-red-400" />
                 )}
               </button>
             )}

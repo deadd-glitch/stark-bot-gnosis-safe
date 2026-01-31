@@ -28,6 +28,8 @@ pub struct ExecutionTracker {
     session_cancellation_tokens: DashMap<i64, CancellationToken>,
     /// Pending task deletions per channel (task IDs to delete)
     pending_task_deletions: DashMap<i64, Vec<u32>>,
+    /// Current planner tasks per channel (for API access on page refresh)
+    channel_planner_tasks: DashMap<i64, Vec<crate::ai::multi_agent::types::PlannerTask>>,
 }
 
 impl ExecutionTracker {
@@ -43,6 +45,7 @@ impl ExecutionTracker {
             cancelled_sessions: DashMap::new(),
             session_cancellation_tokens: DashMap::new(),
             pending_task_deletions: DashMap::new(),
+            channel_planner_tasks: DashMap::new(),
         }
     }
 
@@ -68,6 +71,9 @@ impl ExecutionTracker {
 
         // Also set flag (for checkpoint compatibility)
         self.cancelled_channels.insert(channel_id, true);
+
+        // Clear planner tasks since execution is being stopped
+        self.clear_planner_tasks(channel_id);
 
         // Emit execution stopped event before completing
         if let Some(execution_id) = self.get_execution_id(channel_id) {
@@ -254,6 +260,30 @@ impl ExecutionTracker {
             .get(&channel_id)
             .map(|v| !v.is_empty())
             .unwrap_or(false)
+    }
+
+    // =====================================================
+    // Planner Task Storage (for page refresh/API access)
+    // =====================================================
+
+    /// Store the current planner tasks for a channel
+    pub fn set_planner_tasks(&self, channel_id: i64, tasks: Vec<crate::ai::multi_agent::types::PlannerTask>) {
+        log::debug!("[EXECUTION_TRACKER] Storing {} planner tasks for channel {}", tasks.len(), channel_id);
+        self.channel_planner_tasks.insert(channel_id, tasks);
+    }
+
+    /// Get the current planner tasks for a channel
+    pub fn get_planner_tasks(&self, channel_id: i64) -> Vec<crate::ai::multi_agent::types::PlannerTask> {
+        self.channel_planner_tasks
+            .get(&channel_id)
+            .map(|v| v.clone())
+            .unwrap_or_default()
+    }
+
+    /// Clear planner tasks for a channel (called when execution stops/completes)
+    pub fn clear_planner_tasks(&self, channel_id: i64) {
+        log::debug!("[EXECUTION_TRACKER] Clearing planner tasks for channel {}", channel_id);
+        self.channel_planner_tasks.remove(&channel_id);
     }
 
     /// Start a new execution for a channel

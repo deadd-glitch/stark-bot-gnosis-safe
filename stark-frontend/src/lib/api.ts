@@ -989,11 +989,26 @@ export async function getExecutionStatus(): Promise<ExecutionStatusResponse> {
 }
 
 // Task Queue API
+export interface PlannerTaskInfo {
+  id: number;
+  description: string;
+  status: string;
+}
+
+export interface GetPlannerTasksResponse {
+  success: boolean;
+  tasks: PlannerTaskInfo[];
+}
+
 export interface DeleteTaskResponse {
   success: boolean;
   message?: string;
   error?: string;
   was_current_task?: boolean;
+}
+
+export async function getPlannerTasks(): Promise<GetPlannerTasksResponse> {
+  return apiFetch('/chat/tasks');
 }
 
 export async function deletePlannerTask(taskId: number): Promise<DeleteTaskResponse> {
