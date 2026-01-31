@@ -113,10 +113,15 @@ fn default_network() -> String {
 /// 402 response from agent (JSON body format)
 #[derive(Debug, Deserialize)]
 struct Agent402Response {
-    error: Option<String>,
+    #[allow(dead_code)]
+    error: Option<serde_json::Value>,
     accepts: Vec<AgentPaymentOption>,
-    #[serde(rename = "x402Version")]
-    x402_version: Option<u8>,
+    #[serde(rename = "x402Version", default = "default_x402_version")]
+    x402_version: u8,
+}
+
+fn default_x402_version() -> u8 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -135,24 +140,14 @@ struct AgentPaymentOption {
     description: Option<String>,
 }
 
-/// Payment payload for X-PAYMENT header
+/// Payment payload for X-PAYMENT header (matches x402 spec)
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PaymentPayload {
     x402_version: u8,
-    accepted: AcceptedPayment,
-    payload: ExactEvmPayload,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AcceptedPayment {
     scheme: String,
     network: String,
-    amount: String,
-    pay_to: String,
-    max_timeout_seconds: u64,
-    asset: String,
+    payload: ExactEvmPayload,
 }
 
 #[derive(Debug, Serialize)]
@@ -293,7 +288,8 @@ impl Tool for X402AgentInvokeTool {
         log::info!("[x402_agent] Signing payment with wallet: {}", wallet_address);
 
         // Sign the payment using EIP-3009
-        let payment_payload = match sign_agent_payment(&signer, &payment_option).await {
+        let x402_version = payment_info.x402_version;
+        let payment_payload = match sign_agent_payment(&signer, &payment_option, x402_version).await {
             Ok(p) => p,
             Err(e) => return ToolResult::error(format!("Failed to sign payment: {}", e)),
         };
@@ -309,6 +305,8 @@ impl Tool for X402AgentInvokeTool {
         );
 
         log::info!("[x402_agent] Retrying request with X-PAYMENT header");
+        log::info!("[x402_agent] Payment JSON: {}", payment_json);
+        log::info!("[x402_agent] Payment header (first 100 chars): {}...", &payment_header[..payment_header.len().min(100)]);
 
         // Retry with payment
         let paid_response = match client
@@ -365,6 +363,7 @@ impl Tool for X402AgentInvokeTool {
 async fn sign_agent_payment(
     signer: &X402Signer,
     option: &AgentPaymentOption,
+    x402_version: u8,
 ) -> Result<PaymentPayload, String> {
     // Create payment requirements in the format the signer expects
     let requirements = crate::x402::PaymentRequirements {
@@ -381,17 +380,11 @@ async fn sign_agent_payment(
     // Use the existing signer to create the payment
     let signed = signer.sign_payment(&requirements).await?;
 
-    // Convert to our local type (they should be compatible)
+    // Convert to x402 spec format (scheme + network at top level, not in "accepted")
     Ok(PaymentPayload {
-        x402_version: signed.x402_version,
-        accepted: AcceptedPayment {
-            scheme: signed.accepted.scheme,
-            network: signed.accepted.network,
-            amount: signed.accepted.amount,
-            pay_to: signed.accepted.pay_to,
-            max_timeout_seconds: signed.accepted.max_timeout_seconds,
-            asset: signed.accepted.asset,
-        },
+        x402_version,
+        scheme: option.scheme.clone(),
+        network: option.network.clone(),
         payload: ExactEvmPayload {
             signature: signed.payload.signature,
             authorization: Eip3009Authorization {

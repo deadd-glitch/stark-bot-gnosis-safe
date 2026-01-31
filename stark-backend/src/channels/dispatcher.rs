@@ -330,6 +330,28 @@ impl MessageDispatcher {
             }
         };
 
+        // Reset session state when a new message comes in on a previously-completed session
+        // This allows the session to be reused for new requests
+        if let Ok(Some(status)) = self.db.get_session_completion_status(session.id) {
+            if status.should_stop() {
+                log::info!(
+                    "[DISPATCH] Resetting session {} from {:?} to Active for new request",
+                    session.id, status
+                );
+                if let Err(e) = self.db.update_session_completion_status(session.id, CompletionStatus::Active) {
+                    log::error!("[DISPATCH] Failed to reset session completion status: {}", e);
+                }
+                // Also reset total_iterations in AgentContext if it exists
+                if let Ok(Some(mut context)) = self.db.get_agent_context(session.id) {
+                    context.total_iterations = 0;
+                    context.mode_iterations = 0;
+                    if let Err(e) = self.db.save_agent_context(session.id, &context) {
+                        log::error!("[DISPATCH] Failed to reset agent context iterations: {}", e);
+                    }
+                }
+            }
+        }
+
         // Use clean text (with inline thinking directive removed) for storage
         let message_text = clean_text.as_deref().unwrap_or(&message.text);
 
@@ -1087,6 +1109,10 @@ impl MessageDispatcher {
             if let Ok(Some(status)) = self.db.get_session_completion_status(session_id) {
                 if status.should_stop() {
                     log::info!("[ORCHESTRATED_LOOP] Session status is {:?}, stopping loop", status);
+                    // Mark orchestrator as complete to avoid misleading error messages
+                    if status == CompletionStatus::Complete {
+                        orchestrator_complete = true;
+                    }
                     break;
                 }
             }
@@ -1738,6 +1764,10 @@ impl MessageDispatcher {
             if let Ok(Some(status)) = self.db.get_session_completion_status(session_id) {
                 if status.should_stop() {
                     log::info!("[TEXT_ORCHESTRATED] Session status is {:?}, stopping loop", status);
+                    // Mark orchestrator as complete to avoid misleading error messages
+                    if status == CompletionStatus::Complete {
+                        orchestrator_complete = true;
+                    }
                     break;
                 }
             }
