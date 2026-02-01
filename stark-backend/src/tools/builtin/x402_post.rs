@@ -171,6 +171,7 @@ struct PaymentOption {
 }
 
 /// Payment payload for X-PAYMENT header
+/// This is a simplified local type - the actual payload comes from X402Signer
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PaymentPayload {
@@ -184,9 +185,31 @@ struct PaymentPayload {
 #[serde(rename_all = "camelCase")]
 struct ExactEvmPayload {
     signature: String,
-    authorization: Eip3009Authorization,
+    authorization: EvmAuthorization,
 }
 
+/// Authorization types for different EIP standards
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum EvmAuthorization {
+    /// EIP-2612 Permit authorization (for "permit" scheme)
+    Eip2612(Eip2612Authorization),
+    /// EIP-3009 TransferWithAuthorization (for "exact" scheme)
+    Eip3009(Eip3009Authorization),
+}
+
+/// EIP-2612 Permit authorization fields
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Eip2612Authorization {
+    owner: String,
+    spender: String,
+    value: String,
+    nonce: String,
+    deadline: String,
+}
+
+/// EIP-3009 TransferWithAuthorization fields
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Eip3009Authorization {
@@ -411,20 +434,32 @@ async fn sign_payment(
 
     let signed = signer.sign_payment(&requirements).await?;
 
+    // Convert authorization based on scheme type
+    let authorization = match signed.payload.authorization {
+        crate::x402::EvmAuthorization::Eip2612(auth) => EvmAuthorization::Eip2612(Eip2612Authorization {
+            owner: auth.owner,
+            spender: auth.spender,
+            value: auth.value,
+            nonce: auth.nonce,
+            deadline: auth.deadline,
+        }),
+        crate::x402::EvmAuthorization::Eip3009(auth) => EvmAuthorization::Eip3009(Eip3009Authorization {
+            from: auth.from,
+            to: auth.to,
+            value: auth.value,
+            valid_after: auth.valid_after,
+            valid_before: auth.valid_before,
+            nonce: auth.nonce,
+        }),
+    };
+
     Ok(PaymentPayload {
         x402_version,
         scheme: option.scheme.clone(),
         network: option.network.clone(),
         payload: ExactEvmPayload {
             signature: signed.payload.signature,
-            authorization: Eip3009Authorization {
-                from: signed.payload.authorization.from,
-                to: signed.payload.authorization.to,
-                value: signed.payload.authorization.value,
-                valid_after: signed.payload.authorization.valid_after,
-                valid_before: signed.payload.authorization.valid_before,
-                nonce: signed.payload.authorization.nonce,
-            },
+            authorization,
         },
     })
 }

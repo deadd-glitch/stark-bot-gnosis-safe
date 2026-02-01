@@ -133,9 +133,31 @@ pub struct AcceptedPayment {
 #[serde(rename_all = "camelCase")]
 pub struct ExactEvmPayload {
     pub signature: String,
-    pub authorization: Eip3009Authorization,
+    pub authorization: EvmAuthorization,
 }
 
+/// Authorization types for different EIP standards
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum EvmAuthorization {
+    /// EIP-2612 Permit authorization (for "permit" scheme)
+    Eip2612(Eip2612Authorization),
+    /// EIP-3009 TransferWithAuthorization (for "exact" scheme)
+    Eip3009(Eip3009Authorization),
+}
+
+/// EIP-2612 Permit authorization fields
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Eip2612Authorization {
+    pub owner: String,
+    pub spender: String,
+    pub value: String,
+    pub nonce: String,
+    pub deadline: String,
+}
+
+/// EIP-3009 TransferWithAuthorization fields
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Eip3009Authorization {

@@ -10,11 +10,13 @@ use ethers::types::{H256, U256};
 use ethers::utils::keccak256;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::erc20;
 use super::types::*;
 
 /// x402 payment signer using a local wallet
 pub struct X402Signer {
     wallet: LocalWallet,
+    private_key: String,
 }
 
 impl X402Signer {
@@ -30,7 +32,10 @@ impl X402Signer {
         // Default chain ID, will be overridden per-signature based on network
         let wallet = LocalWallet::from(signing_key).with_chain_id(BASE_CHAIN_ID);
 
-        Ok(Self { wallet })
+        Ok(Self {
+            wallet,
+            private_key: private_key.to_string(),
+        })
     }
 
     /// Get the wallet address
@@ -43,6 +48,61 @@ impl X402Signer {
         let mut bytes = [0u8; 32];
         getrandom::getrandom(&mut bytes).expect("Failed to generate random bytes");
         H256::from(keccak256(bytes))
+    }
+
+    /// Fetch EIP-2612 permit nonce from token contract
+    async fn fetch_permit_nonce(
+        &self,
+        network: &str,
+        token_address: ethers::types::Address,
+    ) -> Result<U256, String> {
+        // Get RPC URL based on network
+        let rpc_url = match network {
+            "base-sepolia" => "https://sepolia.base.org",
+            _ => "https://mainnet.base.org", // Default to Base mainnet
+        };
+
+        // Encode the nonces(address) call
+        let call_data = erc20::encode_nonces(self.wallet.address());
+
+        // Build JSON-RPC request
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_call",
+            "params": [{
+                "to": format!("{:?}", token_address),
+                "data": format!("0x{}", hex::encode(&call_data))
+            }, "latest"],
+            "id": 1
+        });
+
+        // Make the RPC call
+        let client = reqwest::Client::new();
+        let response = client
+            .post(rpc_url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| format!("RPC request failed: {}", e))?;
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+
+        // Extract result
+        let result = body.get("result")
+            .and_then(|r| r.as_str())
+            .ok_or_else(|| {
+                let error = body.get("error").map(|e| e.to_string()).unwrap_or_default();
+                format!("RPC error: {}", error)
+            })?;
+
+        // Decode the nonce
+        let bytes = hex::decode(result.trim_start_matches("0x"))
+            .map_err(|e| format!("Failed to decode nonce hex: {}", e))?;
+
+        erc20::decode_nonces(&bytes)
     }
 
     /// Sign a payment based on the scheme in requirements
@@ -68,7 +128,6 @@ impl X402Signer {
         token_metadata: &TokenMetadata,
     ) -> Result<PaymentPayload, String> {
         let from = self.address();
-        let to = requirements.pay_to_address.to_lowercase();
         let value = requirements.max_amount_required.clone();
 
         // Get facilitator address (spender) from extra field
@@ -83,9 +142,16 @@ impl X402Signer {
         let deadline = now.as_secs() + 3600;
 
         // For EIP-2612, nonce must be fetched from the token contract
-        // But x402 protocol uses a random nonce that the facilitator tracks
-        let nonce = Self::generate_nonce();
-        let nonce_u256 = U256::from_big_endian(nonce.as_bytes());
+        let token_address: ethers::types::Address = token_metadata.address.parse()
+            .map_err(|e| format!("Invalid token address: {}", e))?;
+
+        // Fetch nonce from token contract using direct RPC call
+        let nonce_u256 = self.fetch_permit_nonce(&requirements.network, token_address).await?;
+
+        log::info!(
+            "[X402Signer] EIP-2612 permit nonce for {} on {}: {}",
+            from, requirements.network, nonce_u256
+        );
 
         // Build EIP-712 domain from token metadata
         let domain = Eip712Domain::from_token_metadata(token_metadata)?;
@@ -104,14 +170,13 @@ impl X402Signer {
         // Sign the typed data
         let signature = self.sign_eip712(&domain, message.struct_hash()).await?;
 
-        // Build authorization in the format x402 expects
-        let authorization = Eip3009Authorization {
-            from,
-            to,
+        // Build EIP-2612 authorization format
+        let authorization = Eip2612Authorization {
+            owner: from,
+            spender,
             value,
-            valid_after: "0".to_string(),
-            valid_before: deadline.to_string(),
-            nonce: format!("{:?}", nonce),
+            nonce: nonce_u256.to_string(),
+            deadline: deadline.to_string(),
         };
 
         let payload = PaymentPayload {
@@ -126,7 +191,7 @@ impl X402Signer {
             },
             payload: ExactEvmPayload {
                 signature,
-                authorization,
+                authorization: EvmAuthorization::Eip2612(authorization),
             },
         };
 
@@ -171,6 +236,7 @@ impl X402Signer {
         // Sign the typed data
         let signature = self.sign_eip712(&domain, message.struct_hash()).await?;
 
+        // Build EIP-3009 authorization format
         let authorization = Eip3009Authorization {
             from,
             to,
@@ -192,7 +258,7 @@ impl X402Signer {
             },
             payload: ExactEvmPayload {
                 signature,
-                authorization,
+                authorization: EvmAuthorization::Eip3009(authorization),
             },
         };
 

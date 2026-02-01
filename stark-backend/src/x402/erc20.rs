@@ -15,6 +15,9 @@ const DECIMALS_SELECTOR: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
 /// Function selector for symbol()
 const SYMBOL_SELECTOR: [u8; 4] = [0x95, 0xd8, 0x9b, 0x41];
 
+/// Function selector for nonces(address) - EIP-2612
+const NONCES_SELECTOR: [u8; 4] = [0x7e, 0xce, 0xbe, 0x00];
+
 /// Encode a balanceOf(address) call
 pub fn encode_balance_of(address: Address) -> Vec<u8> {
     let mut data = BALANCE_OF_SELECTOR.to_vec();
@@ -66,6 +69,22 @@ pub fn decode_symbol(data: &[u8]) -> Result<String, String> {
     // ABI-encoded string: offset (32 bytes) + length (32 bytes) + data
     String::decode(data)
         .map_err(|e| format!("Failed to decode symbol: {}", e))
+}
+
+/// Encode a nonces(address) call - EIP-2612 permit nonce
+pub fn encode_nonces(address: Address) -> Vec<u8> {
+    let mut data = NONCES_SELECTOR.to_vec();
+    data.extend_from_slice(&ethers::abi::encode(&[Token::Address(address)]));
+    data
+}
+
+/// Decode a nonces response (uint256)
+pub fn decode_nonces(data: &[u8]) -> Result<U256, String> {
+    if data.len() < 32 {
+        return Err(format!("Nonces response too short: {} bytes", data.len()));
+    }
+    U256::decode(data)
+        .map_err(|e| format!("Failed to decode nonces: {}", e))
 }
 
 #[cfg(test)]
