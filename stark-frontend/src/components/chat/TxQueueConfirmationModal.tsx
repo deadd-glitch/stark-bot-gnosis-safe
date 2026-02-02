@@ -168,6 +168,14 @@ export default function TxQueueConfirmationModal({
   const [decodedFunction, setDecodedFunction] = useState<DecodedFunction | null>(null);
   const [showRawCalldata, setShowRawCalldata] = useState(false);
 
+  // Auto-clear error after 3 seconds
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+
   // Lookup function signature and try to decode when transaction data changes
   useEffect(() => {
     if (!transaction?.data || transaction.data === '0x' || transaction.data === '') {
