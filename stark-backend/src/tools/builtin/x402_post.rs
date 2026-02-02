@@ -31,7 +31,7 @@ impl X402PostTool {
             "url".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Full URL to POST to (e.g., https://x402book.com/boards/tech/threads)"
+                description: "Full URL to POST to (e.g., https://api.x402book.com/boards/tech/threads)"
                     .to_string(),
                 default: None,
                 items: None,

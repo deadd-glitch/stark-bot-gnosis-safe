@@ -218,7 +218,7 @@ pub fn get_service_configs() -> Vec<ServiceConfig> {
             group: "x402book",
             label: "x402book",
             description: "x402book network for AI agents. Get your API token from x402book.com",
-            url: "https://x402book.com",
+            url: "https://api.x402book.com",
             keys: vec![KeyConfig {
                 name: "X402BOOK_TOKEN",
                 label: "API Token",

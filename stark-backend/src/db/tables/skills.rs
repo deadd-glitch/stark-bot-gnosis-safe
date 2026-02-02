@@ -6,16 +6,92 @@ use rusqlite::Result as SqliteResult;
 use crate::skills::{DbSkill, DbSkillScript};
 use super::super::Database;
 
+/// Compare two semantic version strings (e.g., "1.0.0", "2.1.3")
+/// Returns: Some(Ordering) if both are valid semver, None otherwise
+/// Supports versions with or without patch number (e.g., "1.0" treated as "1.0.0")
+fn compare_semver(v1: &str, v2: &str) -> Option<std::cmp::Ordering> {
+    let parse_version = |v: &str| -> Option<(u32, u32, u32)> {
+        let parts: Vec<&str> = v.trim().split('.').collect();
+        if parts.is_empty() || parts.len() > 3 {
+            return None;
+        }
+        let major = parts.first()?.parse().ok()?;
+        let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let patch = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+        Some((major, minor, patch))
+    };
+
+    let v1_parts = parse_version(v1)?;
+    let v2_parts = parse_version(v2)?;
+    Some(v1_parts.cmp(&v2_parts))
+}
+
 impl Database {
     // ============================================
     // Skills CRUD methods (database-backed)
     // ============================================
 
-    /// Create a new skill in the database
+    /// Create a new skill in the database, or update if version is higher
+    /// Returns the skill ID (existing or new)
+    ///
+    /// Uses semantic version comparison: only updates if new version > existing version.
+    /// If versions are equal or incoming is lower, the existing skill is preserved.
     pub fn create_skill(&self, skill: &DbSkill) -> SqliteResult<i64> {
-        let conn = self.conn.lock().unwrap();
-        let now = Utc::now().to_rfc3339();
+        self.create_skill_internal(skill, false)
+    }
 
+    /// Create or update a skill, bypassing version checks
+    /// Use this for source-priority loading (workspace > managed > bundled)
+    pub fn create_skill_force(&self, skill: &DbSkill) -> SqliteResult<i64> {
+        self.create_skill_internal(skill, true)
+    }
+
+    fn create_skill_internal(&self, skill: &DbSkill, force: bool) -> SqliteResult<i64> {
+        let conn = self.conn.lock().unwrap();
+
+        // Check if skill already exists and compare versions (unless force=true)
+        if !force {
+            let existing: Option<(i64, String)> = conn
+                .prepare("SELECT id, version FROM skills WHERE name = ?1")?
+                .query_row([&skill.name], |row| Ok((row.get(0)?, row.get(1)?)))
+                .ok();
+
+            if let Some((existing_id, existing_version)) = existing {
+                // Compare versions - only update if new version is higher
+                match compare_semver(&skill.version, &existing_version) {
+                    Some(std::cmp::Ordering::Greater) => {
+                        log::info!(
+                            "Updating skill '{}': {} -> {}",
+                            skill.name, existing_version, skill.version
+                        );
+                        // Continue to update below
+                    }
+                    Some(std::cmp::Ordering::Equal) => {
+                        log::debug!(
+                            "Skill '{}' version {} unchanged, skipping",
+                            skill.name, skill.version
+                        );
+                        return Ok(existing_id);
+                    }
+                    Some(std::cmp::Ordering::Less) => {
+                        log::debug!(
+                            "Skill '{}' has newer version {} (incoming: {}), skipping",
+                            skill.name, existing_version, skill.version
+                        );
+                        return Ok(existing_id);
+                    }
+                    None => {
+                        // Invalid version format - log warning but still update
+                        log::warn!(
+                            "Invalid version format for skill '{}': existing='{}', new='{}'. Updating anyway.",
+                            skill.name, existing_version, skill.version
+                        );
+                    }
+                }
+            }
+        }
+
+        let now = Utc::now().to_rfc3339();
         let requires_tools_json = serde_json::to_string(&skill.requires_tools).unwrap_or_default();
         let requires_binaries_json = serde_json::to_string(&skill.requires_binaries).unwrap_or_default();
         let arguments_json = serde_json::to_string(&skill.arguments).unwrap_or_default();
