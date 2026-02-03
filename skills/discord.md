@@ -1,7 +1,7 @@
 ---
 name: discord
 description: "Control Discord: send messages, react, post stickers/emojis, run polls, manage threads/pins, fetch permissions/member/role/channel info, handle moderation."
-version: 2.0.0
+version: 2.1.0
 author: starkbot
 metadata: {"clawdbot":{"emoji":"🎮"}}
 tags: [discord, social, messaging, communication, social-media]
@@ -16,12 +16,12 @@ Use `discord` to manage messages, reactions, threads, polls, and moderation. You
 
 ## Default Channel
 
-**If no channel is specified, default to the "general" channel.** Use `discord_lookup` with `action: search_channels` and `query: "general"` to find it if you don't have the channel ID.
+**If no channel is specified, default to the "bot-commands" channel first, then fall back to "general" if it doesn't exist.** Use `discord_lookup` with `action: search_channels` and `query: "bot-commands"` to find it. If no results, search for `query: "general"` instead.
 
 ## Inputs to collect
 
 - For reactions: `channelId`, `messageId`, and an `emoji`.
-- For stickers/polls/sendMessage: a `to` target (`channel:<id>` or `user:<id>`). Optional `content` text. **If no channel specified, use "general".**
+- For stickers/polls/sendMessage: a `to` target (`channel:<id>` or `user:<id>`). Optional `content` text. **If no channel specified, use "bot-commands" first, then "general" as fallback.**
 - Polls also need a `question` plus 2–10 `answers`.
 - For media: `mediaUrl` with `file:///path` for local files or `https://...` for remote.
 - For emoji uploads: `guildId`, `name`, `mediaUrl`, optional `roleIds` (limit 256KB, PNG/JPG/GIF).
@@ -202,6 +202,14 @@ server_id: "123456789"
 ```tool:discord_lookup
 action: search_channels
 server_id: "123456789"
+query: "bot-commands"
+```
+
+If "bot-commands" doesn't exist, fall back to "general":
+
+```tool:discord_lookup
+action: search_channels
+server_id: "123456789"
 query: "general"
 ```
 
@@ -235,7 +243,7 @@ limit: 20
 
 ### Send/edit/delete a message
 
-**If the user doesn't specify a channel, default to "general".** Look up the general channel ID first using `discord_lookup` if needed.
+**If the user doesn't specify a channel, default to "bot-commands" first, then "general" as fallback.** Look up the channel ID using `discord_lookup` - search for "bot-commands" first, and if not found, search for "general".
 
 ```tool:discord
 action: sendMessage
