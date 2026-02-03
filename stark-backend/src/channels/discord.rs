@@ -1,42 +1,107 @@
 use crate::channels::dispatcher::MessageDispatcher;
 use crate::channels::types::{ChannelType, NormalizedMessage};
 use crate::db::Database;
-use crate::discord_hooks::{self, DiscordHooksConfig};
+use crate::discord_hooks;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
-use crate::models::Channel;
+use crate::models::{Channel, ChannelSettingKey, ToolOutputVerbosity};
 use serenity::all::{
-    Client, Context, EventHandler, GatewayIntents, Message, Ready,
+    Client, Context, EditMessage, EventHandler, GatewayIntents, Message, MessageId, Ready,
 };
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
-/// Format a tool call event for Discord display
-fn format_tool_call_for_discord(tool_name: &str, parameters: &serde_json::Value) -> String {
-    let params_str = serde_json::to_string_pretty(parameters)
-        .unwrap_or_else(|_| parameters.to_string());
-    // Truncate params if too long for Discord
-    let params_display = if params_str.len() > 800 {
-        format!("{}...", &params_str[..800])
-    } else {
-        params_str
-    };
-    format!("🔧 **Tool Call:** `{}`\n```json\n{}\n```", tool_name, params_display)
+/// Discord channel output configuration
+#[derive(Debug, Clone)]
+pub struct DiscordOutputConfig {
+    pub tool_call_verbosity: ToolOutputVerbosity,
+    pub tool_result_verbosity: ToolOutputVerbosity,
 }
 
-/// Format a tool result event for Discord display
-fn format_tool_result_for_discord(tool_name: &str, success: bool, duration_ms: i64, content: &str) -> String {
+impl DiscordOutputConfig {
+    /// Load configuration from channel settings in the database
+    pub fn from_channel_settings(db: &Arc<Database>, channel_id: i64) -> Self {
+        let tool_call_verbosity = db
+            .get_channel_setting(channel_id, ChannelSettingKey::DiscordToolCallVerbosity.as_ref())
+            .ok()
+            .flatten()
+            .map(|v| ToolOutputVerbosity::from_str_or_default(&v))
+            .unwrap_or(ToolOutputVerbosity::Minimal);
+
+        let tool_result_verbosity = db
+            .get_channel_setting(channel_id, ChannelSettingKey::DiscordToolResultVerbosity.as_ref())
+            .ok()
+            .flatten()
+            .map(|v| ToolOutputVerbosity::from_str_or_default(&v))
+            .unwrap_or(ToolOutputVerbosity::Minimal);
+
+        Self {
+            tool_call_verbosity,
+            tool_result_verbosity,
+        }
+    }
+}
+
+impl Default for DiscordOutputConfig {
+    fn default() -> Self {
+        Self {
+            tool_call_verbosity: ToolOutputVerbosity::Minimal,
+            tool_result_verbosity: ToolOutputVerbosity::Minimal,
+        }
+    }
+}
+
+/// Format a tool call event for Discord display based on verbosity
+fn format_tool_call_for_discord(
+    tool_name: &str,
+    parameters: &serde_json::Value,
+    verbosity: ToolOutputVerbosity,
+) -> Option<String> {
+    match verbosity {
+        ToolOutputVerbosity::None => None,
+        ToolOutputVerbosity::Minimal => Some(format!("🔧 **Calling:** `{}`", tool_name)),
+        ToolOutputVerbosity::Full => {
+            let params_str = serde_json::to_string_pretty(parameters)
+                .unwrap_or_else(|_| parameters.to_string());
+            // Truncate params if too long for Discord
+            let params_display = if params_str.len() > 800 {
+                format!("{}...", &params_str[..800])
+            } else {
+                params_str
+            };
+            Some(format!("🔧 **Tool Call:** `{}`\n```json\n{}\n```", tool_name, params_display))
+        }
+    }
+}
+
+/// Format a tool result event for Discord display based on verbosity
+fn format_tool_result_for_discord(
+    tool_name: &str,
+    success: bool,
+    duration_ms: i64,
+    content: &str,
+    verbosity: ToolOutputVerbosity,
+) -> Option<String> {
     let status = if success { "✅" } else { "❌" };
-    // Truncate content if too long
-    let content_display = if content.len() > 1200 {
-        format!("{}...", &content[..1200])
-    } else {
-        content.to_string()
-    };
-    format!(
-        "{} **Tool Result:** `{}` ({} ms)\n```\n{}\n```",
-        status, tool_name, duration_ms, content_display
-    )
+    match verbosity {
+        ToolOutputVerbosity::None => None,
+        ToolOutputVerbosity::Minimal => Some(format!(
+            "{} **Result:** `{}` ({} ms)",
+            status, tool_name, duration_ms
+        )),
+        ToolOutputVerbosity::Full => {
+            // Truncate content if too long
+            let content_display = if content.len() > 1200 {
+                format!("{}...", &content[..1200])
+            } else {
+                content.to_string()
+            };
+            Some(format!(
+                "{} **Tool Result:** `{}` ({} ms)\n```\n{}\n```",
+                status, tool_name, duration_ms, content_display
+            ))
+        }
+    }
 }
 
 /// Format an agent mode change for Discord display
@@ -58,7 +123,6 @@ struct DiscordHandler {
     dispatcher: Arc<MessageDispatcher>,
     broadcaster: Arc<EventBroadcaster>,
     db: Arc<Database>,
-    discord_hooks_config: DiscordHooksConfig,
 }
 
 #[serenity::async_trait]
@@ -75,8 +139,8 @@ impl EventHandler for DiscordHandler {
         }
 
         // ===== Discord Hooks Integration =====
-        // Process through discord_hooks module first
-        match discord_hooks::process(&msg, &ctx, &self.db, &self.discord_hooks_config).await {
+        // Process through discord_hooks module first (config reloaded from DB each time)
+        match discord_hooks::process(&msg, &ctx, &self.db, self.channel_id).await {
             Ok(result) => {
                 // If module handled it with a direct response, send it and return
                 if let Some(response) = result.response {
@@ -122,9 +186,9 @@ impl EventHandler for DiscordHandler {
                     return;
                 }
 
-                // Module didn't handle it (bot not mentioned), fall through to existing behavior
+                // Module didn't handle it (bot not mentioned), ignore the message
                 if !result.handled {
-                    // Fall through to original behavior below
+                    return;
                 }
             }
             Err(e) => {
@@ -177,6 +241,13 @@ impl DiscordHandler {
         normalized: NormalizedMessage,
         user_name: &str,
     ) {
+        // Load output configuration from channel settings
+        let output_config = DiscordOutputConfig::from_channel_settings(&self.db, self.channel_id);
+        log::info!(
+            "Discord: Output config - tool_call={:?}, tool_result={:?}",
+            output_config.tool_call_verbosity,
+            output_config.tool_result_verbosity
+        );
 
         // Subscribe to events for real-time tool call forwarding
         let (client_id, mut event_rx) = self.broadcaster.subscribe();
@@ -188,7 +259,11 @@ impl DiscordHandler {
         let channel_id_for_events = self.channel_id;
 
         // Spawn task to forward events to Discord in real-time
+        // Uses a single "status message" that gets edited for each update to reduce spam
         let event_task = tokio::spawn(async move {
+            // Track the status message ID - we'll edit this instead of sending new messages
+            let mut status_message_id: Option<MessageId> = None;
+
             while let Some(event) = event_rx.recv().await {
                 // Only forward events for this channel
                 if let Some(event_channel_id) = event.data.get("channel_id").and_then(|v| v.as_i64()) {
@@ -205,7 +280,7 @@ impl DiscordHandler {
                         let params = event.data.get("parameters")
                             .cloned()
                             .unwrap_or(serde_json::json!({}));
-                        Some(format_tool_call_for_discord(tool_name, &params))
+                        format_tool_call_for_discord(tool_name, &params, output_config.tool_call_verbosity)
                     }
                     "tool.result" => {
                         let tool_name = event.data.get("tool_name")
@@ -220,7 +295,7 @@ impl DiscordHandler {
                         let content = event.data.get("content")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        Some(format_tool_result_for_discord(tool_name, success, duration_ms, content))
+                        format_tool_result_for_discord(tool_name, success, duration_ms, content, output_config.tool_result_verbosity)
                     }
                     "agent.mode_change" => {
                         let mode = event.data.get("mode")
@@ -253,15 +328,54 @@ impl DiscordHandler {
                 };
 
                 if let Some(text) = message_text {
-                    // Split message if too long for Discord
-                    let chunks = split_message(&text, 2000);
-                    for chunk in chunks {
-                        if let Err(e) = discord_channel_id.say(&http, &chunk).await {
-                            log::error!("Discord: Failed to send event message: {}", e);
+                    // Only use the first chunk if message is too long (status updates should be brief)
+                    let display_text = if text.len() > 2000 {
+                        format!("{}...", &text[..1997])
+                    } else {
+                        text
+                    };
+
+                    match status_message_id {
+                        Some(msg_id) => {
+                            // Try to edit the existing status message
+                            let edit_result = discord_channel_id
+                                .edit_message(&http, msg_id, EditMessage::new().content(&display_text))
+                                .await;
+
+                            if let Err(e) = edit_result {
+                                log::warn!("Discord: Failed to edit status message, will delete and recreate: {}", e);
+                                // Try to delete the old message
+                                let _ = discord_channel_id.delete_message(&http, msg_id).await;
+                                // Send a new message
+                                match discord_channel_id.say(&http, &display_text).await {
+                                    Ok(new_msg) => {
+                                        status_message_id = Some(new_msg.id);
+                                    }
+                                    Err(e) => {
+                                        log::error!("Discord: Failed to send new status message: {}", e);
+                                        status_message_id = None;
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            // First message - create it and store the ID
+                            match discord_channel_id.say(&http, &display_text).await {
+                                Ok(msg) => {
+                                    status_message_id = Some(msg.id);
+                                    log::debug!("Discord: Created status message {}", msg.id);
+                                }
+                                Err(e) => {
+                                    log::error!("Discord: Failed to send initial status message: {}", e);
+                                }
+                            }
                         }
                     }
                 }
             }
+
+            // Return the status message ID so we can clean it up after the response
+            status_message_id
         });
 
         // Dispatch to AI
@@ -269,9 +383,30 @@ impl DiscordHandler {
         let result = self.dispatcher.dispatch(normalized).await;
         log::info!("Discord: Dispatch complete, error={:?}", result.error);
 
-        // Unsubscribe and stop event forwarding
+        // Unsubscribe from events
         self.broadcaster.unsubscribe(&client_id);
-        event_task.abort();
+
+        // Wait briefly for the event task to finish processing, then get the status message ID
+        // We give it a short timeout to wrap up any pending edits
+        let status_message_id = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            event_task,
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .flatten();
+
+        // Delete the status message now that we have the final response
+        // This keeps the chat clean - users see only their message and the final answer
+        if let Some(msg_id) = status_message_id {
+            if let Err(e) = msg.channel_id.delete_message(&ctx.http, msg_id).await {
+                log::warn!("Discord: Failed to delete status message: {}", e);
+            } else {
+                log::debug!("Discord: Deleted status message {}", msg_id);
+            }
+        }
+
         log::info!("Discord: Unsubscribed from events, client {}", client_id);
 
         // Send final response
@@ -355,15 +490,11 @@ pub async fn start_discord_listener(
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
 
-    // Load discord hooks config
-    let discord_hooks_config = DiscordHooksConfig::from_env();
-
     let handler = DiscordHandler {
         channel_id,
         dispatcher,
         broadcaster: broadcaster.clone(),
         db,
-        discord_hooks_config,
     };
 
     // Create client

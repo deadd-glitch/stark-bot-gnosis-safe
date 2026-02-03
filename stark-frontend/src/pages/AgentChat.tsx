@@ -118,7 +118,7 @@ export default function AgentChat() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
   const { connected, on, off } = useGateway();
-  const { address, usdcBalance, isConnected: walletConnected, connect: connectWallet, isCorrectNetwork } = useWallet();
+  const { address, usdcBalance, isConnected: walletConnected, connect: connectWallet, isCorrectNetwork, switchToBase } = useWallet();
 
   // Persist messages to localStorage
   useEffect(() => {
@@ -1335,9 +1335,18 @@ export default function AgentChat() {
                 <span className="text-sm font-semibold text-white">
                   {isCorrectNetwork ? formatBalance(usdcBalance) : '--'}
                 </span>
-                <span className="text-xs px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded-full font-medium">
-                  USDC · Base
-                </span>
+                {isCorrectNetwork ? (
+                  <span className="text-xs px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded-full font-medium">
+                    USDC · Base
+                  </span>
+                ) : (
+                  <button
+                    onClick={switchToBase}
+                    className="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded-full font-medium hover:bg-amber-500/30 transition-colors cursor-pointer"
+                  >
+                    Switch to Base
+                  </button>
+                )}
               </div>
             </div>
           ) : (

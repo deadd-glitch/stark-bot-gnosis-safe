@@ -898,6 +898,26 @@ impl Database {
             [],
         )?;
 
+        // Channel settings table - per-channel configuration
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS channel_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                setting_key TEXT NOT NULL,
+                setting_value TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (channel_id) REFERENCES external_channels(id) ON DELETE CASCADE,
+                UNIQUE(channel_id, setting_key)
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_settings_channel ON channel_settings(channel_id)",
+            [],
+        )?;
+
         // Initialize discord_hooks tables
         crate::discord_hooks::db::init_tables(&conn)?;
 

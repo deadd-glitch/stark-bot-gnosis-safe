@@ -1,7 +1,11 @@
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Serialize;
 
-use crate::models::{ChannelResponse, ChannelType, CreateChannelRequest, UpdateChannelRequest};
+use crate::models::{
+    get_settings_for_channel_type, ChannelResponse, ChannelSettingsResponse,
+    ChannelSettingsSchemaResponse, ChannelType, CreateChannelRequest, UpdateChannelRequest,
+    UpdateChannelSettingsRequest,
+};
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -27,11 +31,14 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::scope("/api/channels")
             .route("", web::get().to(list_channels))
             .route("", web::post().to(create_channel))
+            .route("/settings/schema/{channel_type}", web::get().to(get_settings_schema))
             .route("/{id}", web::get().to(get_channel))
             .route("/{id}", web::put().to(update_channel))
             .route("/{id}", web::delete().to(delete_channel))
             .route("/{id}/start", web::post().to(start_channel))
-            .route("/{id}/stop", web::post().to(stop_channel)),
+            .route("/{id}/stop", web::post().to(stop_channel))
+            .route("/{id}/settings", web::get().to(get_channel_settings))
+            .route("/{id}/settings", web::put().to(update_channel_settings)),
     );
 }
 
@@ -444,6 +451,147 @@ async fn stop_channel(
                 success: false,
                 channel: None,
                 error: Some(e),
+            })
+        }
+    }
+}
+
+/// Get available settings schema for a channel type
+async fn get_settings_schema(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
+    let channel_type_str = path.into_inner();
+    let channel_type = match ChannelType::from_str(&channel_type_str) {
+        Some(ct) => ct,
+        None => {
+            return HttpResponse::BadRequest().json(ChannelSettingsSchemaResponse {
+                success: false,
+                channel_type: channel_type_str,
+                settings: vec![],
+            });
+        }
+    };
+
+    let settings = get_settings_for_channel_type(channel_type);
+
+    HttpResponse::Ok().json(ChannelSettingsSchemaResponse {
+        success: true,
+        channel_type: channel_type_str,
+        settings,
+    })
+}
+
+/// Get settings for a channel
+async fn get_channel_settings(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
+    let id = path.into_inner();
+
+    // Verify channel exists
+    match state.db.get_channel(id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return HttpResponse::NotFound().json(ChannelSettingsResponse {
+                success: false,
+                settings: vec![],
+            });
+        }
+        Err(e) => {
+            log::error!("Failed to get channel: {}", e);
+            return HttpResponse::InternalServerError().json(ChannelSettingsResponse {
+                success: false,
+                settings: vec![],
+            });
+        }
+    }
+
+    match state.db.get_channel_settings(id) {
+        Ok(settings) => HttpResponse::Ok().json(ChannelSettingsResponse {
+            success: true,
+            settings,
+        }),
+        Err(e) => {
+            log::error!("Failed to get channel settings: {}", e);
+            HttpResponse::InternalServerError().json(ChannelSettingsResponse {
+                success: false,
+                settings: vec![],
+            })
+        }
+    }
+}
+
+/// Update settings for a channel
+async fn update_channel_settings(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+    body: web::Json<UpdateChannelSettingsRequest>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
+    let id = path.into_inner();
+
+    // Verify channel exists
+    match state.db.get_channel(id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return HttpResponse::NotFound().json(ChannelSettingsResponse {
+                success: false,
+                settings: vec![],
+            });
+        }
+        Err(e) => {
+            log::error!("Failed to get channel: {}", e);
+            return HttpResponse::InternalServerError().json(ChannelSettingsResponse {
+                success: false,
+                settings: vec![],
+            });
+        }
+    }
+
+    // Convert to tuple format for bulk update
+    let settings_tuples: Vec<(String, String)> = body
+        .settings
+        .iter()
+        .map(|s| (s.key.clone(), s.value.clone()))
+        .collect();
+
+    match state.db.update_channel_settings(id, &settings_tuples) {
+        Ok(()) => {
+            // Return updated settings
+            match state.db.get_channel_settings(id) {
+                Ok(settings) => HttpResponse::Ok().json(ChannelSettingsResponse {
+                    success: true,
+                    settings,
+                }),
+                Err(e) => {
+                    log::error!("Failed to get updated channel settings: {}", e);
+                    HttpResponse::InternalServerError().json(ChannelSettingsResponse {
+                        success: false,
+                        settings: vec![],
+                    })
+                }
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to update channel settings: {}", e);
+            HttpResponse::InternalServerError().json(ChannelSettingsResponse {
+                success: false,
+                settings: vec![],
             })
         }
     }

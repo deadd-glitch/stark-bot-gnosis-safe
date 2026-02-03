@@ -2,6 +2,7 @@ pub mod agent_settings;
 pub mod api_key;
 pub mod bot_settings;
 pub mod channel;
+pub mod channel_settings;
 pub mod chat_session;
 pub mod cron_job;
 pub mod execution;
@@ -14,6 +15,11 @@ pub use agent_settings::{AgentSettings, AgentSettingsResponse, UpdateAgentSettin
 pub use bot_settings::{BotSettings, UpdateBotSettingsRequest, DEFAULT_MAX_TOOL_ITERATIONS};
 pub use api_key::{ApiKey, ApiKeyResponse};
 pub use channel::{Channel, ChannelResponse, ChannelType, CreateChannelRequest, UpdateChannelRequest};
+pub use channel_settings::{
+    get_settings_for_channel_type, ChannelSetting, ChannelSettingDefinition, ChannelSettingKey,
+    ChannelSettingsResponse, ChannelSettingsSchemaResponse, SelectOption, SettingInputType,
+    SettingUpdate, ToolOutputVerbosity, UpdateChannelSettingsRequest,
+};
 pub use chat_session::{
     ChatSession, ChatSessionResponse, CompletionStatus, GetOrCreateSessionRequest, ResetPolicy,
     SessionScope, UpdateResetPolicyRequest,

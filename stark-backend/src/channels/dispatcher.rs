@@ -361,6 +361,27 @@ impl MessageDispatcher {
             }
         };
 
+        // Context compaction for Discord and Telegram channels
+        // Keep only the last 10 messages to prevent context from growing too large
+        // This helps avoid API timeouts due to large payloads
+        let channel_type_lower = message.channel_type.to_lowercase();
+        if channel_type_lower == "discord" || channel_type_lower == "telegram" {
+            const KEEP_RECENT_MESSAGES: i32 = 10;
+            match self.db.delete_compacted_messages(session.id, KEEP_RECENT_MESSAGES) {
+                Ok(deleted) if deleted > 0 => {
+                    log::info!(
+                        "[DISPATCH] Compacted session {} for {} channel: deleted {} old messages, keeping {}",
+                        session.id, message.channel_type, deleted, KEEP_RECENT_MESSAGES
+                    );
+                }
+                Ok(_) => {} // No messages deleted, session was already compact
+                Err(e) => {
+                    log::warn!("[DISPATCH] Failed to compact session {}: {}", session.id, e);
+                    // Continue anyway - compaction failure shouldn't block the request
+                }
+            }
+        }
+
         // Reset session state when a new message comes in on a previously-completed session
         // This allows the session to be reused for new requests
         if let Ok(Some(status)) = self.db.get_session_completion_status(session.id) {

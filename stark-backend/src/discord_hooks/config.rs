@@ -1,6 +1,10 @@
 //! Configuration for Discord hooks
 
 use std::collections::HashSet;
+use std::sync::Arc;
+
+use crate::db::Database;
+use crate::models::ChannelSettingKey;
 
 /// Configuration for the Discord hooks module
 #[derive(Debug, Clone)]
@@ -14,10 +18,48 @@ pub struct DiscordHooksConfig {
 }
 
 impl DiscordHooksConfig {
-    /// Create a new config from environment variables
+    /// Create a new config from channel settings in the database
+    ///
+    /// Reads the discord_admin_user_ids setting for the given channel
+    pub fn from_channel_settings(db: &Arc<Database>, channel_id: i64) -> Self {
+        let admin_ids: HashSet<String> = db
+            .get_channel_setting(channel_id, ChannelSettingKey::DiscordAdminUserIds.as_ref())
+            .ok()
+            .flatten()
+            .map(|ids| {
+                ids.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if admin_ids.is_empty() {
+            log::info!(
+                "Discord hooks: No admin user IDs configured for channel {}. \
+                Configure in channel settings to enable admin commands.",
+                channel_id
+            );
+        } else {
+            log::info!(
+                "Discord hooks: Configured {} admin user ID(s) for channel {}",
+                admin_ids.len(),
+                channel_id
+            );
+        }
+
+        Self {
+            admin_user_ids: admin_ids,
+            require_mention_in_servers: true,
+            allow_dm_without_mention: true,
+        }
+    }
+
+    /// Create a new config from environment variables (legacy/fallback)
     ///
     /// Reads:
     /// - `DISCORD_ADMIN_USER_IDS`: Comma-separated list of Discord user IDs
+    #[allow(dead_code)]
     pub fn from_env() -> Self {
         let admin_ids: HashSet<String> = std::env::var("DISCORD_ADMIN_USER_IDS")
             .unwrap_or_default()
@@ -81,7 +123,7 @@ impl DiscordHooksConfig {
 
 impl Default for DiscordHooksConfig {
     fn default() -> Self {
-        Self::from_env()
+        Self::empty()
     }
 }
 

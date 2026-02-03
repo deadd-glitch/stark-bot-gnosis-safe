@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { MessageSquare, Hash, Plus, Play, Square, Trash2, Save } from 'lucide-react';
+import { MessageSquare, Hash, Plus, Play, Square, Trash2, Save, Settings } from 'lucide-react';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -10,7 +10,12 @@ import {
   deleteChannel,
   startChannel,
   stopChannel,
+  getChannelSettings,
+  getChannelSettingsSchema,
+  updateChannelSettings,
   ChannelInfo,
+  ChannelSetting,
+  ChannelSettingDefinition,
 } from '@/lib/api';
 
 const CHANNEL_TYPES = [
@@ -18,6 +23,17 @@ const CHANNEL_TYPES = [
   { value: 'slack', label: 'Slack', icon: Hash, color: 'purple' },
   { value: 'discord', label: 'Discord', icon: MessageSquare, color: 'indigo' },
 ];
+
+function getChannelHints(channelType: string): string[] {
+  switch (channelType) {
+    case 'discord':
+      return [
+        'In the Discord Developer Portal, enable Presence Intent, Server Members Intent, and Message Content Intent under Bot settings.',
+      ];
+    default:
+      return [];
+  }
+}
 
 interface ChannelFormData {
   channel_type: string;
@@ -33,6 +49,33 @@ const emptyForm: ChannelFormData = {
   app_token: '',
 };
 
+// Settings toggle with gear icon
+function SettingsToggle({
+  enabled,
+  onToggle,
+}: {
+  enabled: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+        enabled ? 'bg-stark-500' : 'bg-slate-600'
+      }`}
+      title={enabled ? 'Hide settings' : 'Show settings'}
+    >
+      <span
+        className={`inline-flex h-5 w-5 items-center justify-center rounded-full bg-white transition-transform ${
+          enabled ? 'translate-x-5' : 'translate-x-0.5'
+        }`}
+      >
+        <Settings className="h-3 w-3 text-slate-600" />
+      </span>
+    </button>
+  );
+}
+
 export default function Channels() {
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -42,6 +85,12 @@ export default function Channels() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<ChannelFormData>(emptyForm);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
+
+  // Settings mode state
+  const [settingsMode, setSettingsMode] = useState<number | null>(null);
+  const [settingsSchema, setSettingsSchema] = useState<ChannelSettingDefinition[]>([]);
+  const [settingsValues, setSettingsValues] = useState<Record<string, string>>({});
+  const [settingsLoading, setSettingsLoading] = useState(false);
 
   const fetchChannels = async () => {
     try {
@@ -151,6 +200,64 @@ export default function Channels() {
       bot_token: channel.bot_token,
       app_token: channel.app_token || '',
     });
+  };
+
+  // Toggle settings mode for a channel
+  const toggleSettingsMode = async (channel: ChannelInfo) => {
+    if (settingsMode === channel.id) {
+      // Close settings mode
+      setSettingsMode(null);
+      setSettingsSchema([]);
+      setSettingsValues({});
+      return;
+    }
+
+    // Open settings mode
+    setSettingsLoading(true);
+    setSettingsMode(channel.id);
+
+    try {
+      // Load schema and current values in parallel
+      const [schema, currentSettings] = await Promise.all([
+        getChannelSettingsSchema(channel.channel_type),
+        getChannelSettings(channel.id),
+      ]);
+
+      setSettingsSchema(schema);
+
+      // Convert current settings array to a key-value map
+      const valuesMap: Record<string, string> = {};
+      currentSettings.forEach((s: ChannelSetting) => {
+        valuesMap[s.setting_key] = s.setting_value;
+      });
+      setSettingsValues(valuesMap);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load settings');
+      setSettingsMode(null);
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
+  // Save channel settings
+  const saveSettings = async (channelId: number) => {
+    setActionLoading(channelId);
+    try {
+      const settingsArray = Object.entries(settingsValues).map(([key, value]) => ({
+        key,
+        value,
+      }));
+      await updateChannelSettings(channelId, settingsArray);
+      setError(null);
+      // Close settings mode after successful save
+      setSettingsMode(null);
+      setSettingsSchema([]);
+      setSettingsValues({});
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save settings');
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   const getChannelIcon = (type: string) => {
@@ -280,6 +387,10 @@ export default function Channels() {
                       }`}>
                         {channel.running ? 'Running' : 'Stopped'}
                       </span>
+                      <SettingsToggle
+                        enabled={settingsMode === channel.id}
+                        onToggle={() => toggleSettingsMode(channel)}
+                      />
                       {channel.running ? (
                         <Button
                           variant="secondary"
@@ -314,7 +425,59 @@ export default function Channels() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {isEditing ? (
+                  {settingsMode === channel.id ? (
+                    // Settings mode view
+                    <div className="space-y-4">
+                      {settingsLoading ? (
+                        <div className="flex items-center justify-center py-4">
+                          <div className="w-5 h-5 border-2 border-stark-500 border-t-transparent rounded-full animate-spin" />
+                          <span className="ml-2 text-slate-400">Loading settings...</span>
+                        </div>
+                      ) : settingsSchema.length === 0 ? (
+                        <div className="text-center py-4 text-slate-400">
+                          No configurable settings for {channel.channel_type} channels.
+                        </div>
+                      ) : (
+                        <>
+                          {settingsSchema.map((setting) => (
+                            <div key={setting.key}>
+                              <Input
+                                label={setting.label}
+                                value={settingsValues[setting.key] || ''}
+                                onChange={(e) =>
+                                  setSettingsValues({
+                                    ...settingsValues,
+                                    [setting.key]: e.target.value,
+                                  })
+                                }
+                                placeholder={setting.placeholder}
+                              />
+                              <p className="mt-1 text-xs text-slate-500">{setting.description}</p>
+                            </div>
+                          ))}
+                          <div className="flex gap-2 justify-end pt-2">
+                            <Button
+                              variant="secondary"
+                              onClick={() => {
+                                setSettingsMode(null);
+                                setSettingsSchema([]);
+                                setSettingsValues({});
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              onClick={() => saveSettings(channel.id)}
+                              disabled={isActionLoading}
+                            >
+                              <Save className="w-4 h-4 mr-1" />
+                              Save Settings
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : isEditing ? (
                     <div className="space-y-4">
                       <Input
                         label="Name"
@@ -351,6 +514,11 @@ export default function Channels() {
                           {channel.bot_token}
                         </code>
                       </div>
+                      {getChannelHints(channel.channel_type).map((hint, idx) => (
+                        <div key={idx} className="px-3 py-2 bg-slate-700/50 border border-slate-600/50 rounded-lg">
+                          <p className="text-xs text-slate-300">{hint}</p>
+                        </div>
+                      ))}
                       {channel.app_token && (
                         <div>
                           <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1">App Token</label>

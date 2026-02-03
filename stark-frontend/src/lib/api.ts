@@ -545,6 +545,32 @@ export interface ChannelInfo {
   running?: boolean;
 }
 
+// Channel Settings types
+export interface ChannelSetting {
+  channel_id: number;
+  setting_key: string;
+  setting_value: string;
+}
+
+export interface ChannelSettingDefinition {
+  key: string;
+  label: string;
+  description: string;
+  input_type: 'text' | 'text_area' | 'toggle' | 'number';
+  placeholder: string;
+}
+
+export interface ChannelSettingsResponse {
+  success: boolean;
+  settings: ChannelSetting[];
+}
+
+export interface ChannelSettingsSchemaResponse {
+  success: boolean;
+  channel_type: string;
+  settings: ChannelSettingDefinition[];
+}
+
 interface ChannelsListResponse {
   success: boolean;
   channels?: ChannelInfo[];
@@ -626,6 +652,28 @@ export async function stopChannel(id: number): Promise<ChannelInfo> {
     throw new Error(response.error || 'Failed to stop channel');
   }
   return response.channel;
+}
+
+// Channel Settings API
+export async function getChannelSettingsSchema(channelType: string): Promise<ChannelSettingDefinition[]> {
+  const response = await apiFetch<ChannelSettingsSchemaResponse>(`/channels/settings/schema/${channelType}`);
+  return response.settings || [];
+}
+
+export async function getChannelSettings(channelId: number): Promise<ChannelSetting[]> {
+  const response = await apiFetch<ChannelSettingsResponse>(`/channels/${channelId}/settings`);
+  return response.settings || [];
+}
+
+export async function updateChannelSettings(
+  channelId: number,
+  settings: Array<{ key: string; value: string }>
+): Promise<ChannelSetting[]> {
+  const response = await apiFetch<ChannelSettingsResponse>(`/channels/${channelId}/settings`, {
+    method: 'PUT',
+    body: JSON.stringify({ settings }),
+  });
+  return response.settings || [];
 }
 
 // Logs API

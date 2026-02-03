@@ -5,6 +5,12 @@
 //! - Limited command handling for regular users (register, status, help)
 //! - Discord user profile management with public address registration
 //! - Tool for resolving Discord mentions to registered public addresses
+//!
+//! ## Query Mode for Admins
+//!
+//! By default, admins must first say "@bot query" to activate query mode.
+//! The next @mention from that admin will be treated as an agentic query.
+//! This prevents accidental agent invocations.
 
 pub mod commands;
 pub mod config;
@@ -12,9 +18,17 @@ pub mod db;
 pub mod tools;
 
 use serenity::all::{Context, Message, UserId};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 pub use config::DiscordHooksConfig;
 pub use db::DiscordUserProfile;
+
+// Track which admin users are currently listening for a query
+// Key: discord_user_id, Value: true if waiting for next message to be treated as query
+lazy_static::lazy_static! {
+    static ref LISTENING_FOR_QUERY: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
+}
 
 /// Result of processing a Discord message
 #[derive(Debug)]
@@ -69,6 +83,33 @@ pub struct ForwardRequest {
     pub is_admin: bool,
 }
 
+/// Check if a user is in "listening for query" mode
+fn is_listening_for_query(user_id: &str) -> bool {
+    LISTENING_FOR_QUERY
+        .lock()
+        .unwrap()
+        .get(user_id)
+        .copied()
+        .unwrap_or(false)
+}
+
+/// Set a user's "listening for query" state
+fn set_listening_for_query(user_id: &str, listening: bool) {
+    let mut map = LISTENING_FOR_QUERY.lock().unwrap();
+    if listening {
+        map.insert(user_id.to_string(), true);
+        log::info!("Discord hooks: Admin {} is now listening for query", user_id);
+    } else {
+        map.remove(user_id);
+        log::info!("Discord hooks: Admin {} query mode reset", user_id);
+    }
+}
+
+/// Check if the message text contains the "query" keyword (case-insensitive)
+fn contains_query_keyword(text: &str) -> bool {
+    text.to_lowercase().contains("query")
+}
+
 /// Check if the bot is mentioned in a message
 pub fn is_bot_mentioned(msg: &Message, bot_id: UserId) -> bool {
     msg.mentions.iter().any(|u| u.id == bot_id)
@@ -93,12 +134,17 @@ pub fn extract_command_text(content: &str, bot_id: UserId) -> String {
 /// - `handled: false` - Bot not mentioned, fall through to existing behavior
 /// - `handled: true` with `response` - Send the response directly
 /// - `handled: true` with `forward_to_agent` - Forward to agent dispatcher
+///
+/// Note: The config is reloaded from the database on each message to pick up
+/// changes to admin user IDs without requiring a channel restart.
 pub async fn process(
     msg: &Message,
     ctx: &Context,
-    db: &crate::db::Database,
-    config: &DiscordHooksConfig,
+    db: &std::sync::Arc<crate::db::Database>,
+    channel_id: i64,
 ) -> Result<ProcessResult, String> {
+    // Reload config from database to pick up any changes
+    let config = DiscordHooksConfig::from_channel_settings(db, channel_id);
     // Get bot's user ID by fetching current user info
     let current_user = ctx
         .http
@@ -149,13 +195,45 @@ pub async fn process(
     );
 
     if is_admin {
-        // Admin: forward to agent
-        Ok(ProcessResult::forward_to_agent(ForwardRequest {
-            text: command_text,
-            user_id,
-            user_name,
-            is_admin: true,
-        }))
+        // Admin flow: implement query mode state machine
+        let is_listening = is_listening_for_query(&user_id);
+
+        if is_listening {
+            // Admin was listening for a query - this message IS the query
+            // Reset the listening state and forward to agent
+            set_listening_for_query(&user_id, false);
+            log::info!(
+                "Discord hooks: Admin {} submitted query: '{}'",
+                user_name,
+                if command_text.len() > 50 {
+                    format!("{}...", &command_text[..50])
+                } else {
+                    command_text.clone()
+                }
+            );
+            Ok(ProcessResult::forward_to_agent(ForwardRequest {
+                text: command_text,
+                user_id,
+                user_name,
+                is_admin: true,
+            }))
+        } else if contains_query_keyword(&command_text) {
+            // Admin said "query" - activate listening mode
+            set_listening_for_query(&user_id, true);
+            Ok(ProcessResult::handled(
+                "Okay, I am ready for your query. Send your next message with @starkbot and I'll process it.".to_string(),
+            ))
+        } else {
+            // Admin mentioned bot without "query" keyword and wasn't in listening mode
+            // Explain how to activate query mode
+            Ok(ProcessResult::handled(
+                "Hi! I'd be happy to help with a query. Just say the magic word **\"query\"** \
+                (e.g., `@starkbot query`) and I'll listen for your next command.\n\n\
+                Example:\n\
+                1. `@starkbot query` → I'll respond that I'm ready\n\
+                2. `@starkbot check my portfolio` → I'll process this as an agentic query".to_string(),
+            ))
+        }
     } else {
         // Regular user: try limited commands
         match commands::parse(&command_text) {
@@ -202,5 +280,69 @@ mod tests {
             extract_command_text("just some text", bot_id),
             "just some text"
         );
+    }
+
+    #[test]
+    fn test_contains_query_keyword() {
+        // Basic cases
+        assert!(contains_query_keyword("query"));
+        assert!(contains_query_keyword("QUERY"));
+        assert!(contains_query_keyword("Query"));
+
+        // In context
+        assert!(contains_query_keyword("hey bot, query please"));
+        assert!(contains_query_keyword("I have a query for you"));
+        assert!(contains_query_keyword("query: what is the price"));
+
+        // Should not match
+        assert!(!contains_query_keyword("hello"));
+        assert!(!contains_query_keyword("tip @user 100"));
+        assert!(!contains_query_keyword("check status"));
+    }
+
+    #[test]
+    fn test_listening_for_query_state() {
+        let user_id = "test_user_123";
+
+        // Initially not listening
+        assert!(!is_listening_for_query(user_id));
+
+        // Set to listening
+        set_listening_for_query(user_id, true);
+        assert!(is_listening_for_query(user_id));
+
+        // Reset
+        set_listening_for_query(user_id, false);
+        assert!(!is_listening_for_query(user_id));
+    }
+
+    #[test]
+    fn test_multiple_users_listening_state() {
+        let user1 = "admin_1";
+        let user2 = "admin_2";
+
+        // Set user1 to listening
+        set_listening_for_query(user1, true);
+
+        // user2 should not be listening
+        assert!(is_listening_for_query(user1));
+        assert!(!is_listening_for_query(user2));
+
+        // Set user2 to listening
+        set_listening_for_query(user2, true);
+
+        // Both should be listening
+        assert!(is_listening_for_query(user1));
+        assert!(is_listening_for_query(user2));
+
+        // Reset user1
+        set_listening_for_query(user1, false);
+
+        // Only user2 should be listening
+        assert!(!is_listening_for_query(user1));
+        assert!(is_listening_for_query(user2));
+
+        // Cleanup
+        set_listening_for_query(user2, false);
     }
 }
