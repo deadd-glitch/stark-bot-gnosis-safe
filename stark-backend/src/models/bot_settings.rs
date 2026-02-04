@@ -25,6 +25,8 @@ pub struct BotSettings {
     pub rogue_mode_enabled: bool,
     /// Maximum safe mode queries per user per 10 minutes
     pub safe_mode_max_queries_per_10min: i32,
+    /// Custom keystore server URL (None = default: https://keystore.defirelay.com)
+    pub keystore_url: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -41,6 +43,7 @@ impl Default for BotSettings {
             max_tool_iterations: DEFAULT_MAX_TOOL_ITERATIONS,
             rogue_mode_enabled: false,
             safe_mode_max_queries_per_10min: DEFAULT_SAFE_MODE_MAX_QUERIES_PER_10MIN,
+            keystore_url: None, // Uses default: https://keystore.defirelay.com
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -58,4 +61,6 @@ pub struct UpdateBotSettingsRequest {
     pub max_tool_iterations: Option<i32>,
     pub rogue_mode_enabled: Option<bool>,
     pub safe_mode_max_queries_per_10min: Option<i32>,
+    /// Custom keystore URL (empty string or null = use default)
+    pub keystore_url: Option<String>,
 }

@@ -3,6 +3,10 @@ use ethers::signers::{LocalWallet, Signer};
 use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, EnumIter, EnumString, IntoEnumIterator};
 
+use crate::backup::{
+    ApiKeyEntry, BackupData, BotSettingsEntry, MindConnectionEntry, MindNodeEntry,
+};
+use crate::db::tables::mind_nodes::{CreateMindNodeRequest, UpdateMindNodeRequest};
 use crate::keystore_client::KEYSTORE_CLIENT;
 use crate::models::ApiKeyResponse;
 use crate::AppState;
@@ -327,6 +331,12 @@ pub struct BackupResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_settings: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -339,12 +349,20 @@ pub struct CloudKeyPreview {
     pub key_preview: String,
 }
 
-/// Response for preview cloud keys
+/// Response for preview cloud backup
 #[derive(Serialize)]
 pub struct PreviewKeysResponse {
     pub success: bool,
     pub key_count: usize,
     pub keys: Vec<CloudKeyPreview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_settings: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backup_version: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -560,7 +578,7 @@ async fn delete_api_key(
     }
 }
 
-/// Backup API keys to cloud (encrypted with burner wallet key)
+/// Backup all user data to cloud (encrypted with burner wallet key)
 async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl Responder {
     if let Err(resp) = validate_session_from_request(&state, &req) {
         return resp;
@@ -573,13 +591,35 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
             return HttpResponse::BadRequest().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
                 error: Some("Burner wallet not configured".to_string()),
             });
         }
     };
 
-    // Get all keys with values
+    // Get wallet address
+    let wallet_address = match get_wallet_address(&private_key) {
+        Some(addr) => addr,
+        None => {
+            return HttpResponse::InternalServerError().json(BackupResponse {
+                success: false,
+                key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
+                message: None,
+                error: Some("Failed to derive wallet address".to_string()),
+            });
+        }
+    };
+
+    // Build BackupData with all user data
+    let mut backup = BackupData::new(wallet_address);
+
+    // Get all API keys with values
     let keys = match state.db.list_api_keys_with_values() {
         Ok(k) => k,
         Err(e) => {
@@ -587,63 +627,160 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
             return HttpResponse::InternalServerError().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
-                error: Some("Failed to export keys".to_string()),
+                error: Some("Failed to export API keys".to_string()),
             });
         }
     };
 
-    if keys.is_empty() {
-        return HttpResponse::BadRequest().json(BackupResponse {
-            success: false,
-            key_count: None,
-            message: None,
-            error: Some("No API keys to backup".to_string()),
-        });
-    }
-
-    // Serialize keys to JSON
-    let keys_for_backup: Vec<BackupKey> = keys
+    backup.api_keys = keys
         .iter()
-        .map(|(name, value)| BackupKey {
+        .map(|(name, value)| ApiKeyEntry {
             key_name: name.clone(),
             key_value: value.clone(),
         })
         .collect();
-    let keys_json = match serde_json::to_string(&keys_for_backup) {
+
+    // Get mind map nodes
+    match state.db.list_mind_nodes() {
+        Ok(nodes) => {
+            backup.mind_map_nodes = nodes
+                .iter()
+                .map(|n| MindNodeEntry {
+                    id: n.id,
+                    body: n.body.clone(),
+                    position_x: n.position_x,
+                    position_y: n.position_y,
+                    is_trunk: n.is_trunk,
+                    created_at: n.created_at.to_rfc3339(),
+                    updated_at: n.updated_at.to_rfc3339(),
+                })
+                .collect();
+        }
+        Err(e) => {
+            log::warn!("Failed to list mind nodes for backup: {}", e);
+        }
+    }
+
+    // Get mind map connections
+    match state.db.list_mind_node_connections() {
+        Ok(connections) => {
+            backup.mind_map_connections = connections
+                .iter()
+                .map(|c| MindConnectionEntry {
+                    parent_id: c.parent_id,
+                    child_id: c.child_id,
+                })
+                .collect();
+        }
+        Err(e) => {
+            log::warn!("Failed to list mind connections for backup: {}", e);
+        }
+    }
+
+    // Get bot settings
+    match state.db.get_bot_settings() {
+        Ok(settings) => {
+            // Serialize custom_rpc_endpoints as JSON string for backup
+            let custom_rpc_json = settings
+                .custom_rpc_endpoints
+                .as_ref()
+                .and_then(|h| serde_json::to_string(h).ok());
+
+            backup.bot_settings = Some(BotSettingsEntry {
+                bot_name: settings.bot_name.clone(),
+                bot_email: settings.bot_email.clone(),
+                web3_tx_requires_confirmation: settings.web3_tx_requires_confirmation,
+                rpc_provider: Some(settings.rpc_provider.clone()),
+                custom_rpc_endpoints: custom_rpc_json,
+                max_tool_iterations: Some(settings.max_tool_iterations),
+                rogue_mode_enabled: settings.rogue_mode_enabled,
+                safe_mode_max_queries_per_10min: Some(settings.safe_mode_max_queries_per_10min),
+            });
+        }
+        Err(e) => {
+            log::warn!("Failed to get bot settings for backup: {}", e);
+        }
+    }
+
+    // Check if there's anything to backup
+    if backup.api_keys.is_empty() && backup.mind_map_nodes.is_empty() && backup.bot_settings.is_none() {
+        return HttpResponse::BadRequest().json(BackupResponse {
+            success: false,
+            key_count: None,
+            node_count: None,
+            connection_count: None,
+            has_settings: None,
+            message: None,
+            error: Some("No data to backup".to_string()),
+        });
+    }
+
+    let key_count = backup.api_keys.len();
+    let node_count = backup.mind_map_nodes.len();
+    let connection_count = backup.mind_map_connections.len();
+    let has_settings = backup.bot_settings.is_some();
+    let item_count = backup.item_count();
+
+    // Serialize BackupData to JSON
+    let backup_json = match serde_json::to_string(&backup) {
         Ok(j) => j,
         Err(e) => {
-            log::error!("Failed to serialize keys: {}", e);
+            log::error!("Failed to serialize backup: {}", e);
             return HttpResponse::InternalServerError().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
-                error: Some("Failed to serialize keys".to_string()),
+                error: Some("Failed to serialize backup".to_string()),
             });
         }
     };
 
     // Encrypt with ECIES using the burner wallet's public key
-    let encrypted_data = match encrypt_with_private_key(&private_key, &keys_json) {
+    let encrypted_data = match encrypt_with_private_key(&private_key, &backup_json) {
         Ok(data) => data,
         Err(e) => {
-            log::error!("Failed to encrypt keys: {}", e);
+            log::error!("Failed to encrypt backup: {}", e);
             return HttpResponse::InternalServerError().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
-                error: Some("Failed to encrypt keys".to_string()),
+                error: Some("Failed to encrypt backup".to_string()),
             });
         }
     };
 
     // Upload to keystore API (with SIWE authentication)
-    match KEYSTORE_CLIENT.store_keys(&private_key, &encrypted_data, keys.len()).await {
+    match KEYSTORE_CLIENT.store_keys(&private_key, &encrypted_data, item_count).await {
         Ok(resp) if resp.success => {
+            // Record backup in local state
+            if let Err(e) = state.db.record_keystore_backup(&backup.wallet_address, backup.version, item_count) {
+                log::warn!("Failed to record backup: {}", e);
+            }
+
             HttpResponse::Ok().json(BackupResponse {
                 success: true,
-                key_count: Some(keys.len()),
-                message: Some(format!("Backed up {} keys to cloud", keys.len())),
+                key_count: Some(key_count),
+                node_count: Some(node_count),
+                connection_count: Some(connection_count),
+                has_settings: Some(has_settings),
+                message: Some(format!(
+                    "Backed up {} items ({} keys, {} nodes, {} connections{})",
+                    item_count,
+                    key_count,
+                    node_count,
+                    connection_count,
+                    if has_settings { ", settings" } else { "" }
+                )),
                 error: None,
             })
         }
@@ -652,6 +789,9 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
             HttpResponse::BadGateway().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
                 error: resp.error.or(Some("Failed to upload to keystore".to_string())),
             })
@@ -661,6 +801,9 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
             HttpResponse::BadGateway().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
                 error: Some(format!("Keystore error: {}", e)),
             })
@@ -668,7 +811,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
     }
 }
 
-/// Restore API keys from cloud backup
+/// Restore all user data from cloud backup
 async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl Responder {
     if let Err(resp) = validate_session_from_request(&state, &req) {
         return resp;
@@ -681,6 +824,9 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             return HttpResponse::BadRequest().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
                 error: Some("Burner wallet not configured".to_string()),
             });
@@ -695,6 +841,9 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             return HttpResponse::BadGateway().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
                 error: Some(format!("Keystore error: {}", e)),
             });
@@ -707,6 +856,9 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             return HttpResponse::NotFound().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
                 error: Some(error),
             });
@@ -714,6 +866,9 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
         return HttpResponse::BadGateway().json(BackupResponse {
             success: false,
             key_count: None,
+            node_count: None,
+            connection_count: None,
+            has_settings: None,
             message: None,
             error: Some(error),
         });
@@ -725,6 +880,9 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             return HttpResponse::BadGateway().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
                 error: Some("No encrypted data in response".to_string()),
             });
@@ -739,43 +897,151 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             return HttpResponse::BadRequest().json(BackupResponse {
                 success: false,
                 key_count: None,
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
                 message: None,
                 error: Some("Failed to decrypt backup (wrong wallet?)".to_string()),
             });
         }
     };
 
-    // Parse the decrypted keys
-    let restored_keys: Vec<BackupKey> = match serde_json::from_str(&decrypted_json) {
-        Ok(keys) => keys,
-        Err(e) => {
-            log::error!("Failed to parse decrypted keys: {}", e);
-            return HttpResponse::BadRequest().json(BackupResponse {
-                success: false,
-                key_count: None,
-                message: None,
-                error: Some("Invalid backup data format".to_string()),
-            });
+    // Try to parse as new BackupData format first, fall back to legacy Vec<BackupKey>
+    let backup_data: BackupData = match serde_json::from_str(&decrypted_json) {
+        Ok(data) => data,
+        Err(_) => {
+            // Try legacy format (just API keys)
+            let legacy_keys: Vec<BackupKey> = match serde_json::from_str(&decrypted_json) {
+                Ok(keys) => keys,
+                Err(e) => {
+                    log::error!("Failed to parse backup: {}", e);
+                    return HttpResponse::BadRequest().json(BackupResponse {
+                        success: false,
+                        key_count: None,
+                        node_count: None,
+                        connection_count: None,
+                        has_settings: None,
+                        message: None,
+                        error: Some("Invalid backup data format".to_string()),
+                    });
+                }
+            };
+            // Convert legacy format to BackupData
+            let wallet_address = get_wallet_address(&private_key).unwrap_or_default();
+            let mut backup = BackupData::new(wallet_address);
+            backup.api_keys = legacy_keys
+                .into_iter()
+                .map(|k| ApiKeyEntry {
+                    key_name: k.key_name,
+                    key_value: k.key_value,
+                })
+                .collect();
+            backup
         }
     };
 
-    // Restore each key to the database
-    let mut restored_count = 0;
-    for key in &restored_keys {
-        // Only restore valid key names
+    // Restore API keys
+    let mut restored_keys = 0;
+    for key in &backup_data.api_keys {
         if get_valid_key_names().contains(&key.key_name.as_str()) {
             if let Err(e) = state.db.upsert_api_key(&key.key_name, &key.key_value) {
                 log::error!("Failed to restore key {}: {}", key.key_name, e);
             } else {
-                restored_count += 1;
+                restored_keys += 1;
             }
         }
     }
 
+    // Restore mind map nodes with ID mapping
+    // Note: trunk nodes are auto-managed, so we skip is_trunk during restoration
+    let mut old_to_new_id: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let mut restored_nodes = 0;
+    for node in &backup_data.mind_map_nodes {
+        // Skip trunk nodes - they're auto-managed
+        if node.is_trunk {
+            continue;
+        }
+
+        let request = CreateMindNodeRequest {
+            body: Some(node.body.clone()),
+            position_x: node.position_x,
+            position_y: node.position_y,
+            parent_id: None, // Connections are handled separately
+        };
+
+        match state.db.create_mind_node(&request) {
+            Ok(new_node) => {
+                old_to_new_id.insert(node.id, new_node.id);
+                restored_nodes += 1;
+            }
+            Err(e) => {
+                // Skip duplicates
+                if !e.to_string().contains("UNIQUE constraint") {
+                    log::warn!("Failed to restore mind node: {}", e);
+                }
+            }
+        }
+    }
+
+    // Restore mind map connections using ID mapping
+    let mut restored_connections = 0;
+    for conn in &backup_data.mind_map_connections {
+        let new_parent_id = old_to_new_id.get(&conn.parent_id);
+        let new_child_id = old_to_new_id.get(&conn.child_id);
+        if let (Some(&parent_id), Some(&child_id)) = (new_parent_id, new_child_id) {
+            match state.db.create_mind_node_connection(parent_id, child_id) {
+                Ok(_) => restored_connections += 1,
+                Err(e) => {
+                    if !e.to_string().contains("UNIQUE constraint") {
+                        log::warn!("Failed to restore connection: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    // Restore bot settings if present
+    let has_settings = backup_data.bot_settings.is_some();
+    if let Some(settings) = &backup_data.bot_settings {
+        // Parse custom_rpc_endpoints from JSON string if present
+        let custom_rpc: Option<std::collections::HashMap<String, String>> =
+            settings.custom_rpc_endpoints.as_ref().and_then(|s| {
+                serde_json::from_str(s).ok()
+            });
+
+        if let Err(e) = state.db.update_bot_settings_full(
+            Some(&settings.bot_name),
+            Some(&settings.bot_email),
+            Some(settings.web3_tx_requires_confirmation),
+            settings.rpc_provider.as_deref(),
+            custom_rpc.as_ref(),
+            settings.max_tool_iterations,
+            Some(settings.rogue_mode_enabled),
+            settings.safe_mode_max_queries_per_10min,
+            None, // Don't restore keystore_url - it's infrastructure config
+        ) {
+            log::warn!("Failed to restore bot settings: {}", e);
+        }
+    }
+
+    // Record retrieval in local state
+    if let Some(wallet_address) = get_wallet_address(&private_key) {
+        let _ = state.db.record_keystore_retrieval(&wallet_address);
+    }
+
     HttpResponse::Ok().json(BackupResponse {
         success: true,
-        key_count: Some(restored_count),
-        message: Some(format!("Restored {} keys from backup", restored_count)),
+        key_count: Some(restored_keys),
+        node_count: Some(restored_nodes),
+        connection_count: Some(restored_connections),
+        has_settings: Some(has_settings),
+        message: Some(format!(
+            "Restored {} keys, {} nodes, {} connections{}",
+            restored_keys,
+            restored_nodes,
+            restored_connections,
+            if has_settings { ", settings" } else { "" }
+        )),
         error: None,
     })
 }
@@ -831,7 +1097,7 @@ fn create_key_preview(value: &str) -> String {
     }
 }
 
-/// Preview API keys from cloud backup (without restoring)
+/// Preview cloud backup contents (without restoring)
 async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> impl Responder {
     if let Err(resp) = validate_session_from_request(&state, &req) {
         return resp;
@@ -845,6 +1111,10 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 success: false,
                 key_count: 0,
                 keys: vec![],
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
+                backup_version: None,
                 message: None,
                 error: Some("Burner wallet not configured".to_string()),
             });
@@ -860,6 +1130,10 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 success: false,
                 key_count: 0,
                 keys: vec![],
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
+                backup_version: None,
                 message: None,
                 error: Some(format!("Keystore error: {}", e)),
             });
@@ -873,6 +1147,10 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 success: false,
                 key_count: 0,
                 keys: vec![],
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
+                backup_version: None,
                 message: None,
                 error: Some(error),
             });
@@ -881,6 +1159,10 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
             success: false,
             key_count: 0,
             keys: vec![],
+            node_count: None,
+            connection_count: None,
+            has_settings: None,
+            backup_version: None,
             message: None,
             error: Some(error),
         });
@@ -893,6 +1175,10 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 success: false,
                 key_count: 0,
                 keys: vec![],
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
+                backup_version: None,
                 message: None,
                 error: Some("No encrypted data in response".to_string()),
             });
@@ -908,13 +1194,45 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 success: false,
                 key_count: 0,
                 keys: vec![],
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
+                backup_version: None,
                 message: None,
                 error: Some("Failed to decrypt backup (wrong wallet?)".to_string()),
             });
         }
     };
 
-    // Parse the decrypted keys
+    // Try to parse as new BackupData format first, fall back to legacy Vec<BackupKey>
+    let valid_keys = get_valid_key_names();
+
+    // Try new format first
+    if let Ok(backup_data) = serde_json::from_str::<BackupData>(&decrypted_json) {
+        let previews: Vec<CloudKeyPreview> = backup_data
+            .api_keys
+            .iter()
+            .filter(|k| valid_keys.contains(&k.key_name.as_str()))
+            .map(|k| CloudKeyPreview {
+                key_name: k.key_name.clone(),
+                key_preview: create_key_preview(&k.key_value),
+            })
+            .collect();
+
+        return HttpResponse::Ok().json(PreviewKeysResponse {
+            success: true,
+            key_count: previews.len(),
+            keys: previews,
+            node_count: Some(backup_data.mind_map_nodes.len()),
+            connection_count: Some(backup_data.mind_map_connections.len()),
+            has_settings: Some(backup_data.bot_settings.is_some()),
+            backup_version: Some(backup_data.version),
+            message: Some("Cloud backup retrieved successfully".to_string()),
+            error: None,
+        });
+    }
+
+    // Fall back to legacy format (just API keys)
     let cloud_keys: Vec<BackupKey> = match serde_json::from_str(&decrypted_json) {
         Ok(keys) => keys,
         Err(e) => {
@@ -923,6 +1241,10 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 success: false,
                 key_count: 0,
                 keys: vec![],
+                node_count: None,
+                connection_count: None,
+                has_settings: None,
+                backup_version: None,
                 message: None,
                 error: Some("Invalid backup data format".to_string()),
             });
@@ -930,7 +1252,6 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
     };
 
     // Convert to previews (only valid key names, with masked values)
-    let valid_keys = get_valid_key_names();
     let previews: Vec<CloudKeyPreview> = cloud_keys
         .iter()
         .filter(|k| valid_keys.contains(&k.key_name.as_str()))
@@ -944,7 +1265,11 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
         success: true,
         key_count: previews.len(),
         keys: previews,
-        message: Some("Cloud keys retrieved successfully".to_string()),
+        node_count: None,
+        connection_count: None,
+        has_settings: None,
+        backup_version: None,
+        message: Some("Cloud keys retrieved successfully (legacy format)".to_string()),
         error: None,
     })
 }

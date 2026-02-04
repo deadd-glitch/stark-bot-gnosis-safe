@@ -500,6 +500,10 @@ impl MessageDispatcher {
                 channel_safe_mode,
                 message.force_safe_mode
             );
+            // Mark session as safe mode for UI display
+            if let Err(e) = self.db.set_session_safe_mode(session.id) {
+                log::warn!("[DISPATCH] Failed to set session safe_mode: {}", e);
+            }
             tool_config.profile = crate::tools::ToolProfile::SafeMode;
             // Convert ToolGroup enum to String for allowed_groups
             // SafeMode allows: Web group only

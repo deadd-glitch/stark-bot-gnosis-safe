@@ -314,6 +314,20 @@ impl Database {
             conn.execute("ALTER TABLE bot_settings ADD COLUMN safe_mode_max_queries_per_10min INTEGER NOT NULL DEFAULT 5", [])?;
         }
 
+        // Migration: Add keystore_url column to bot_settings if it doesn't exist
+        let has_keystore_url: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('bot_settings') WHERE name='keystore_url'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_keystore_url {
+            conn.execute("ALTER TABLE bot_settings ADD COLUMN keystore_url TEXT", [])?;
+        }
+
         // Initialize bot_settings with defaults if empty
         let bot_settings_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM bot_settings", [], |row| row.get(0))
@@ -365,6 +379,8 @@ impl Database {
         // Sliding window compaction: Add generation counter and timestamp
         let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN compaction_generation INTEGER NOT NULL DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN last_compaction_at TEXT", []);
+        // Safe mode: Track if session was used in safe mode context
+        let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN safe_mode INTEGER NOT NULL DEFAULT 0", []);
 
         // Session messages table - conversation transcripts
         conn.execute(
@@ -1088,6 +1104,44 @@ impl Database {
             [],
         )?;
 
+        // Keystore state - track backup/retrieval status per wallet
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS keystore_state (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wallet_address TEXT UNIQUE NOT NULL,
+                auto_retrieved INTEGER NOT NULL DEFAULT 0,
+                last_retrieved_at TEXT,
+                last_backup_at TEXT,
+                last_backup_version INTEGER,
+                last_backup_item_count INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            [],
+        )?;
+
+        // Migration: Add auto_sync columns to keystore_state for tracking boot-time sync status
+        let _ = conn.execute(
+            "ALTER TABLE keystore_state ADD COLUMN auto_sync_status TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE keystore_state ADD COLUMN auto_sync_message TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE keystore_state ADD COLUMN auto_sync_at TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE keystore_state ADD COLUMN auto_sync_key_count INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE keystore_state ADD COLUMN auto_sync_node_count INTEGER",
+            [],
+        );
+
         Ok(())
     }
 
@@ -1127,4 +1181,137 @@ impl Database {
         )?;
         Ok(())
     }
+
+    // =====================================================
+    // Keystore State Operations
+    // =====================================================
+
+    /// Check if auto-retrieval has been done for a wallet
+    pub fn has_keystore_auto_retrieved(&self, wallet_address: &str) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn();
+        let result: Option<bool> = conn.query_row(
+            "SELECT auto_retrieved FROM keystore_state WHERE wallet_address = ?1",
+            [wallet_address],
+            |row| row.get(0),
+        ).ok();
+        Ok(result.unwrap_or(false))
+    }
+
+    /// Mark that auto-retrieval has been attempted for a wallet
+    pub fn mark_keystore_auto_retrieved(&self, wallet_address: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO keystore_state (wallet_address, auto_retrieved, last_retrieved_at, updated_at)
+             VALUES (?1, 1, ?2, ?2)
+             ON CONFLICT(wallet_address) DO UPDATE SET
+                auto_retrieved = 1,
+                last_retrieved_at = ?2,
+                updated_at = ?2",
+            rusqlite::params![wallet_address, now],
+        )?;
+        Ok(())
+    }
+
+    /// Record a successful backup to keystore
+    pub fn record_keystore_backup(
+        &self,
+        wallet_address: &str,
+        version: u32,
+        item_count: usize,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO keystore_state (wallet_address, last_backup_at, last_backup_version, last_backup_item_count, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?2)
+             ON CONFLICT(wallet_address) DO UPDATE SET
+                last_backup_at = ?2,
+                last_backup_version = ?3,
+                last_backup_item_count = ?4,
+                updated_at = ?2",
+            rusqlite::params![wallet_address, now, version, item_count as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Record a successful retrieval from keystore
+    pub fn record_keystore_retrieval(&self, wallet_address: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO keystore_state (wallet_address, last_retrieved_at, updated_at)
+             VALUES (?1, ?2, ?2)
+             ON CONFLICT(wallet_address) DO UPDATE SET
+                last_retrieved_at = ?2,
+                updated_at = ?2",
+            rusqlite::params![wallet_address, now],
+        )?;
+        Ok(())
+    }
+
+    /// Record auto-sync result (success or failure)
+    pub fn record_auto_sync_result(
+        &self,
+        wallet_address: &str,
+        status: &str,
+        message: &str,
+        key_count: Option<i32>,
+        node_count: Option<i32>,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO keystore_state (wallet_address, auto_sync_status, auto_sync_message, auto_sync_at, auto_sync_key_count, auto_sync_node_count, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?4)
+             ON CONFLICT(wallet_address) DO UPDATE SET
+                auto_sync_status = ?2,
+                auto_sync_message = ?3,
+                auto_sync_at = ?4,
+                auto_sync_key_count = ?5,
+                auto_sync_node_count = ?6,
+                updated_at = ?4",
+            rusqlite::params![wallet_address.to_lowercase(), status, message, now, key_count, node_count],
+        )?;
+        Ok(())
+    }
+
+    /// Get auto-sync status for a wallet
+    pub fn get_auto_sync_status(&self, wallet_address: &str) -> Result<Option<AutoSyncStatus>, rusqlite::Error> {
+        let conn = self.conn();
+        let result = conn.query_row(
+            "SELECT auto_sync_status, auto_sync_message, auto_sync_at, auto_sync_key_count, auto_sync_node_count
+             FROM keystore_state WHERE wallet_address = ?1",
+            [wallet_address.to_lowercase()],
+            |row| {
+                let status: Option<String> = row.get(0)?;
+                let message: Option<String> = row.get(1)?;
+                let at: Option<String> = row.get(2)?;
+                let key_count: Option<i32> = row.get(3)?;
+                let node_count: Option<i32> = row.get(4)?;
+                Ok(status.map(|s| AutoSyncStatus {
+                    status: s,
+                    message: message.unwrap_or_default(),
+                    synced_at: at,
+                    key_count,
+                    node_count,
+                }))
+            },
+        );
+        match result {
+            Ok(status) => Ok(status),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// Auto-sync status info
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AutoSyncStatus {
+    pub status: String,
+    pub message: String,
+    pub synced_at: Option<String>,
+    pub key_count: Option<i32>,
+    pub node_count: Option<i32>,
 }

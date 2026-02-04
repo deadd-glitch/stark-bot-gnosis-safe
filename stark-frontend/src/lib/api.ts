@@ -240,6 +240,7 @@ export async function getSessions(): Promise<Array<{
   updated_at: string;
   message_count?: number;
   initial_query?: string;
+  safe_mode?: boolean;
 }>> {
   return apiFetch('/sessions');
 }
@@ -255,6 +256,7 @@ export async function getSession(id: number): Promise<{
   updated_at: string;
   message_count?: number;
   initial_query?: string;
+  safe_mode?: boolean;
 }> {
   return apiFetch(`/sessions/${id}`);
 }
@@ -1090,6 +1092,7 @@ export interface BotSettings {
   max_tool_iterations: number;
   rogue_mode_enabled: boolean;
   safe_mode_max_queries_per_10min: number;
+  keystore_url?: string;
   created_at: string;
   updated_at: string;
 }
@@ -1107,6 +1110,7 @@ export async function updateBotSettings(data: {
   max_tool_iterations?: number;
   rogue_mode_enabled?: boolean;
   safe_mode_max_queries_per_10min?: number;
+  keystore_url?: string;
 }): Promise<BotSettings> {
   return apiFetch('/bot-settings', {
     method: 'PUT',
@@ -1125,6 +1129,20 @@ export interface RpcProvider {
 
 export async function getRpcProviders(): Promise<RpcProvider[]> {
   return apiFetch('/rpc-providers');
+}
+
+// Auto-sync status API
+export interface AutoSyncStatus {
+  status: string | null;
+  message: string;
+  synced_at?: string;
+  key_count?: number;
+  node_count?: number;
+  keystore_url: string;
+}
+
+export async function getAutoSyncStatus(): Promise<AutoSyncStatus> {
+  return apiFetch('/auto-sync-status');
 }
 
 // Confirmation API

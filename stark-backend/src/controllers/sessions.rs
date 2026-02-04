@@ -57,14 +57,9 @@ async fn list_sessions(
                 .map(|s| {
                     let is_web = s.channel_type == "web";
                     let session_id = s.id;
-                    let channel_id = s.channel_id;
                     let mut response: ChatSessionResponse = s.into();
                     if let Ok(count) = data.db.count_session_messages(session_id) {
                         response.message_count = Some(count);
-                    }
-                    // Get safe_mode from the channel
-                    if let Ok(Some(channel)) = data.db.get_channel(channel_id) {
-                        response.safe_mode = Some(channel.safe_mode);
                     }
                     // For web sessions, get the initial query (first user message)
                     if is_web {
@@ -139,14 +134,9 @@ async fn get_session(
 
     match data.db.get_chat_session(session_id) {
         Ok(Some(session)) => {
-            let channel_id = session.channel_id;
             let mut response: ChatSessionResponse = session.into();
             if let Ok(count) = data.db.count_session_messages(response.id) {
                 response.message_count = Some(count);
-            }
-            // Get safe_mode from the channel
-            if let Ok(Some(channel)) = data.db.get_channel(channel_id) {
-                response.safe_mode = Some(channel.safe_mode);
             }
             HttpResponse::Ok().json(response)
         }

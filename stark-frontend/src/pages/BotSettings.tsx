@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent } from 'react';
-import { Save, Bot, Server, Shield } from 'lucide-react';
+import { Save, Bot, Server, Shield, Cloud, AlertTriangle, CheckCircle, Info, XCircle } from 'lucide-react';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -8,8 +8,10 @@ import {
   getBotSettings,
   updateBotSettings,
   getRpcProviders,
+  getAutoSyncStatus,
   BotSettings as BotSettingsType,
   RpcProvider,
+  AutoSyncStatus,
 } from '@/lib/api';
 
 export default function BotSettings() {
@@ -23,6 +25,8 @@ export default function BotSettings() {
   const [rpcProviders, setRpcProviders] = useState<RpcProvider[]>([]);
   const [rogueModeEnabled, setRogueModeEnabled] = useState(false);
   const [safeModeMaxQueries, setSafeModeMaxQueries] = useState(5);
+  const [keystoreUrl, setKeystoreUrl] = useState('');
+  const [autoSyncStatus, setAutoSyncStatus] = useState<AutoSyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -30,7 +34,17 @@ export default function BotSettings() {
   useEffect(() => {
     loadSettings();
     loadRpcProviders();
+    loadAutoSyncStatus();
   }, []);
+
+  const loadAutoSyncStatus = async () => {
+    try {
+      const status = await getAutoSyncStatus();
+      setAutoSyncStatus(status);
+    } catch (err) {
+      console.error('Failed to load auto-sync status:', err);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -41,6 +55,7 @@ export default function BotSettings() {
       setRpcProvider(data.rpc_provider || 'defirelay');
       setRogueModeEnabled(data.rogue_mode_enabled || false);
       setSafeModeMaxQueries(data.safe_mode_max_queries_per_10min || 5);
+      setKeystoreUrl(data.keystore_url || '');
       if (data.custom_rpc_endpoints) {
         setCustomRpcBase(data.custom_rpc_endpoints.base || '');
         setCustomRpcMainnet(data.custom_rpc_endpoints.mainnet || '');
@@ -80,6 +95,7 @@ export default function BotSettings() {
         rpc_provider: rpcProvider,
         custom_rpc_endpoints: customEndpoints,
         safe_mode_max_queries_per_10min: safeModeMaxQueries,
+        keystore_url: keystoreUrl,
       });
       setSettings(updated);
       setMessage({ type: 'success', text: 'Settings saved successfully' });
@@ -91,6 +107,71 @@ export default function BotSettings() {
   };
 
   const selectedProvider = rpcProviders.find(p => p.id === rpcProvider);
+
+  // Render auto-sync status banner
+  const renderAutoSyncBanner = () => {
+    if (!autoSyncStatus || autoSyncStatus.status === null || autoSyncStatus.status === 'skipped') {
+      return null;
+    }
+
+    const statusConfig: Record<string, { icon: React.ReactNode; bgClass: string; textClass: string; borderClass: string }> = {
+      success: {
+        icon: <CheckCircle className="w-5 h-5 text-green-400" />,
+        bgClass: 'bg-green-500/10',
+        textClass: 'text-green-300',
+        borderClass: 'border-green-500/30',
+      },
+      no_backup: {
+        icon: <Info className="w-5 h-5 text-blue-400" />,
+        bgClass: 'bg-blue-500/10',
+        textClass: 'text-blue-300',
+        borderClass: 'border-blue-500/30',
+      },
+      server_error: {
+        icon: <AlertTriangle className="w-5 h-5 text-yellow-400" />,
+        bgClass: 'bg-yellow-500/10',
+        textClass: 'text-yellow-300',
+        borderClass: 'border-yellow-500/30',
+      },
+      error: {
+        icon: <XCircle className="w-5 h-5 text-red-400" />,
+        bgClass: 'bg-red-500/10',
+        textClass: 'text-red-300',
+        borderClass: 'border-red-500/30',
+      },
+    };
+
+    const config = statusConfig[autoSyncStatus.status] || statusConfig.error;
+
+    return (
+      <div className={`mb-6 p-4 rounded-lg border ${config.bgClass} ${config.borderClass}`}>
+        <div className="flex items-start gap-3">
+          {config.icon}
+          <div className="flex-1">
+            <div className={`font-medium ${config.textClass}`}>
+              {autoSyncStatus.status === 'success' ? 'Cloud Backup Restored' :
+               autoSyncStatus.status === 'no_backup' ? 'No Cloud Backup Found' :
+               autoSyncStatus.status === 'server_error' ? 'Keystore Server Unreachable' :
+               'Auto-Sync Error'}
+            </div>
+            <p className="text-sm text-slate-400 mt-1">
+              {autoSyncStatus.message}
+            </p>
+            {autoSyncStatus.synced_at && (
+              <p className="text-xs text-slate-500 mt-2">
+                {new Date(autoSyncStatus.synced_at).toLocaleString()}
+              </p>
+            )}
+            {autoSyncStatus.status === 'no_backup' && (
+              <p className="text-xs text-slate-400 mt-2">
+                Go to <a href="/api-keys" className="text-stark-400 hover:text-stark-300 underline">API Keys</a> to backup your settings to the cloud.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   if (isLoading) {
     return (
@@ -109,6 +190,9 @@ export default function BotSettings() {
         <h1 className="text-2xl font-bold text-white mb-2">Bot Settings</h1>
         <p className="text-slate-400">Configure bot identity and RPC settings</p>
       </div>
+
+      {/* Auto-sync status banner */}
+      {renderAutoSyncBanner()}
 
       <form onSubmit={handleSubmit} className="grid gap-6 max-w-2xl">
         {/* Bot Identity Section */}
@@ -225,6 +309,28 @@ export default function BotSettings() {
             <p className="text-xs text-slate-500 -mt-2">
               Maximum number of safe mode queries each user can make within a 10-minute window.
               Applies to non-admin users on Discord, Twitter mentions, etc.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Cloud Backup Configuration Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Cloud className="w-5 h-5 text-stark-400" />
+              Cloud Backup Configuration
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Input
+              label="Keystore Server URL"
+              value={keystoreUrl}
+              onChange={(e) => setKeystoreUrl(e.target.value)}
+              placeholder="https://keystore.defirelay.com"
+            />
+            <p className="text-xs text-slate-500 -mt-2">
+              Custom keystore server URL for cloud backups. Leave empty to use the default server
+              (https://keystore.defirelay.com). Requires x402 payment support.
             </p>
           </CardContent>
         </Card>

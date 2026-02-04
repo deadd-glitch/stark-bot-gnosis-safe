@@ -159,6 +159,9 @@ pub struct ChatSession {
     /// Completion status of the session
     #[serde(default)]
     pub completion_status: CompletionStatus,
+    /// Whether this session was used in safe mode context
+    #[serde(default)]
+    pub safe_mode: bool,
 }
 
 /// Request to get or create a chat session
@@ -235,7 +238,7 @@ impl From<ChatSession> for ChatSessionResponse {
             compaction_id: session.compaction_id,
             completion_status: session.completion_status,
             initial_query: None,
-            safe_mode: None,
+            safe_mode: if session.safe_mode { Some(true) } else { None },
         }
     }
 }

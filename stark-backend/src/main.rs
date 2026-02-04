@@ -5,6 +5,7 @@ use dotenv::dotenv;
 use std::sync::Arc;
 
 mod ai;
+mod backup;
 mod channels;
 mod config;
 mod context;
@@ -55,6 +56,264 @@ pub struct AppState {
     pub safe_mode_rate_limiter: SafeModeChannelRateLimiter,
 }
 
+/// Auto-retrieve backup from keystore on fresh instance
+///
+/// This solves the common problem where starkbot is dockerized and
+/// database state is lost on container updates. On boot, if we haven't
+/// already retrieved from keystore, we attempt to restore state.
+///
+/// Conditions for auto-retrieval:
+/// 1. Wallet address hasn't been auto-retrieved before (tracked in keystore_state)
+/// 2. Local database appears fresh (no API keys, no mind nodes beyond trunk)
+///
+/// Retry logic: 3 attempts with exponential backoff (2s, 4s, 8s)
+fn spawn_auto_retrieve_from_keystore(db: std::sync::Arc<db::Database>, private_key: String) {
+    tokio::spawn(async move {
+        auto_retrieve_from_keystore_with_retry(&db, &private_key).await;
+    });
+}
+
+async fn auto_retrieve_from_keystore_with_retry(db: &std::sync::Arc<db::Database>, private_key: &str) {
+    const MAX_RETRIES: u32 = 3;
+    const INITIAL_BACKOFF_SECS: u64 = 2;
+
+    // Get wallet address (normalize to lowercase)
+    let wallet_address = match keystore_client::get_wallet_address(private_key) {
+        Ok(addr) => addr.to_lowercase(),
+        Err(e) => {
+            log::warn!("[Keystore] Failed to get wallet address: {}", e);
+            return;
+        }
+    };
+
+    // Check if we've already done auto-retrieval for this wallet
+    match db.has_keystore_auto_retrieved(&wallet_address) {
+        Ok(true) => {
+            log::debug!("[Keystore] Already auto-retrieved for wallet {}", wallet_address);
+            return;
+        }
+        Ok(false) => {}
+        Err(e) => {
+            log::warn!("[Keystore] Failed to check auto-retrieval status: {}", e);
+            return;
+        }
+    }
+
+    // Additional check: only auto-retrieve if local state is truly fresh
+    // (no API keys and only trunk node in mind map)
+    let has_api_keys = db.list_api_keys().map(|k| !k.is_empty()).unwrap_or(false);
+    let mind_node_count = db.list_mind_nodes().map(|n| n.len()).unwrap_or(0);
+
+    if has_api_keys || mind_node_count > 1 {
+        log::info!(
+            "[Keystore] Local state exists (keys: {}, nodes: {}), skipping auto-retrieval",
+            has_api_keys,
+            mind_node_count
+        );
+        // Mark as retrieved so we don't check again
+        let _ = db.mark_keystore_auto_retrieved(&wallet_address);
+        let _ = db.record_auto_sync_result(
+            &wallet_address,
+            "skipped",
+            "Local state already exists",
+            None,
+            None,
+        );
+        return;
+    }
+
+    log::info!("[Keystore] Fresh instance detected, attempting auto-retrieval for {}", wallet_address);
+
+    // Retry loop with exponential backoff
+    let mut last_error = String::new();
+    for attempt in 0..MAX_RETRIES {
+        if attempt > 0 {
+            let backoff = INITIAL_BACKOFF_SECS * (1 << (attempt - 1)); // 2s, 4s, 8s
+            log::info!("[Keystore] Retry {} of {}, waiting {}s...", attempt + 1, MAX_RETRIES, backoff);
+            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+        }
+
+        match keystore_client::KEYSTORE_CLIENT.get_keys(private_key).await {
+            Ok(resp) => {
+                if resp.success {
+                    // Successfully got backup, restore it
+                    if let Some(encrypted_data) = resp.encrypted_data {
+                        match restore_backup_data(db, private_key, &encrypted_data).await {
+                            Ok((key_count, node_count)) => {
+                                log::info!("[Keystore] Auto-sync restored {} keys, {} nodes", key_count, node_count);
+                                let _ = db.record_auto_sync_result(
+                                    &wallet_address,
+                                    "success",
+                                    &format!("Restored {} API keys and {} mind map nodes", key_count, node_count),
+                                    Some(key_count as i32),
+                                    Some(node_count as i32),
+                                );
+                            }
+                            Err(e) => {
+                                log::error!("[Keystore] Failed to restore backup: {}", e);
+                                let _ = db.record_auto_sync_result(
+                                    &wallet_address,
+                                    "error",
+                                    &format!("Restore failed: {}", e),
+                                    None,
+                                    None,
+                                );
+                            }
+                        }
+                    }
+                    let _ = db.mark_keystore_auto_retrieved(&wallet_address);
+                    return;
+                } else if let Some(error) = &resp.error {
+                    if error.contains("No backup found") {
+                        log::info!("[Keystore] No cloud backup found - starting fresh");
+                        let _ = db.mark_keystore_auto_retrieved(&wallet_address);
+                        let _ = db.record_auto_sync_result(
+                            &wallet_address,
+                            "no_backup",
+                            "No cloud backup found. Use the API Keys page to backup your settings, or restore from another source.",
+                            None,
+                            None,
+                        );
+                        return;
+                    }
+                    last_error = error.clone();
+                }
+            }
+            Err(e) => {
+                last_error = e;
+                log::warn!("[Keystore] Attempt {} failed: {}", attempt + 1, last_error);
+            }
+        }
+    }
+
+    log::error!("[Keystore] Auto-retrieval failed after {} attempts: {}", MAX_RETRIES, last_error);
+    // Mark as attempted anyway to prevent repeated failures on every restart
+    let _ = db.mark_keystore_auto_retrieved(&wallet_address);
+
+    // Determine error type for user-friendly message
+    let (status, message) = if last_error.contains("connection") || last_error.contains("timeout") || last_error.contains("Failed to connect") {
+        ("server_error", format!("Could not connect to keystore server after {} attempts. Check your network connection and keystore URL settings.", MAX_RETRIES))
+    } else {
+        ("error", format!("Auto-sync failed: {}", last_error))
+    };
+    let _ = db.record_auto_sync_result(&wallet_address, status, &message, None, None);
+}
+
+/// Restore backup data from encrypted payload (used by both auto-retrieval and manual restore)
+/// Returns (key_count, node_count) on success
+async fn restore_backup_data(
+    db: &std::sync::Arc<db::Database>,
+    private_key: &str,
+    encrypted_data: &str,
+) -> Result<(usize, usize), String> {
+    let backup_data = keystore_client::decrypt_backup_data(private_key, encrypted_data)?;
+
+    log::info!(
+        "[Keystore] Restoring backup v{} with {} items from {}",
+        backup_data.version,
+        backup_data.item_count(),
+        backup_data.created_at.format("%Y-%m-%d %H:%M:%S")
+    );
+
+    // Restore API keys
+    let mut restored_keys = 0;
+    for key in &backup_data.api_keys {
+        if let Err(e) = db.upsert_api_key(&key.key_name, &key.key_value) {
+            log::warn!("[Keystore] Failed to restore key {}: {}", key.key_name, e);
+        } else {
+            restored_keys += 1;
+        }
+    }
+    if restored_keys > 0 {
+        log::info!("[Keystore] Restored {} API keys", restored_keys);
+    }
+
+    // Restore mind map nodes (create ID mapping for connections)
+    let mut old_to_new_id: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let mut restored_nodes = 0;
+
+    for node in &backup_data.mind_map_nodes {
+        if node.is_trunk {
+            // Get or create trunk and map to it
+            match db.get_or_create_trunk_node() {
+                Ok(trunk) => {
+                    old_to_new_id.insert(node.id, trunk.id);
+                    if !node.body.is_empty() {
+                        let _ = db.update_mind_node(trunk.id, &db::tables::mind_nodes::UpdateMindNodeRequest {
+                            body: Some(node.body.clone()),
+                            position_x: node.position_x,
+                            position_y: node.position_y,
+                        });
+                    }
+                }
+                Err(e) => log::warn!("[Keystore] Failed to get trunk node: {}", e),
+            }
+        } else {
+            let request = db::tables::mind_nodes::CreateMindNodeRequest {
+                body: Some(node.body.clone()),
+                position_x: node.position_x,
+                position_y: node.position_y,
+                parent_id: None,
+            };
+            match db.create_mind_node(&request) {
+                Ok(new_node) => {
+                    old_to_new_id.insert(node.id, new_node.id);
+                    restored_nodes += 1;
+                }
+                Err(e) => log::warn!("[Keystore] Failed to restore mind node: {}", e),
+            }
+        }
+    }
+    if restored_nodes > 0 {
+        log::info!("[Keystore] Restored {} mind map nodes", restored_nodes);
+    }
+
+    // Restore mind map connections using ID mapping
+    let mut restored_connections = 0;
+    for conn in &backup_data.mind_map_connections {
+        if let (Some(&parent_id), Some(&child_id)) = (
+            old_to_new_id.get(&conn.parent_id),
+            old_to_new_id.get(&conn.child_id),
+        ) {
+            match db.create_mind_node_connection(parent_id, child_id) {
+                Ok(_) => restored_connections += 1,
+                Err(e) => {
+                    if !e.to_string().contains("UNIQUE constraint") {
+                        log::warn!("[Keystore] Failed to restore connection: {}", e);
+                    }
+                }
+            }
+        }
+    }
+    if restored_connections > 0 {
+        log::info!("[Keystore] Restored {} mind map connections", restored_connections);
+    }
+
+    // Restore bot settings if present
+    if let Some(settings) = &backup_data.bot_settings {
+        let custom_rpc: Option<std::collections::HashMap<String, String>> =
+            settings.custom_rpc_endpoints.as_ref().and_then(|s| serde_json::from_str(s).ok());
+
+        match db.update_bot_settings_full(
+            Some(&settings.bot_name),
+            Some(&settings.bot_email),
+            Some(settings.web3_tx_requires_confirmation),
+            settings.rpc_provider.as_deref(),
+            custom_rpc.as_ref(),
+            settings.max_tool_iterations,
+            Some(settings.rogue_mode_enabled),
+            settings.safe_mode_max_queries_per_10min,
+            None, // Don't restore keystore_url - it's infrastructure config
+        ) {
+            Ok(_) => log::info!("[Keystore] Restored bot settings"),
+            Err(e) => log::warn!("[Keystore] Failed to restore bot settings: {}", e),
+        }
+    }
+
+    log::info!("[Keystore] Restore complete");
+    Ok((restored_keys, restored_nodes))
+}
+
 /// SPA fallback handler - serves index.html for client-side routing
 async fn spa_fallback() -> actix_web::Result<NamedFile> {
     // Check both possible locations for frontend dist
@@ -101,6 +360,22 @@ async fn main() -> std::io::Result<()> {
     log::info!("Initializing database at {}", config.database_url);
     let db = Database::new(&config.database_url).expect("Failed to initialize database");
     let db = Arc::new(db);
+
+    // Initialize keystore URL from bot_settings (must be before auto-retrieve)
+    if let Ok(settings) = db.get_bot_settings() {
+        if let Some(ref url) = settings.keystore_url {
+            if !url.is_empty() {
+                log::info!("Using custom keystore URL: {}", url);
+                keystore_client::KEYSTORE_CLIENT.set_base_url(url).await;
+            }
+        }
+    }
+
+    // Spawn keystore auto-retrieval in background (restore state from cloud backup on fresh instance)
+    // Runs async with retry to not block server startup
+    if let Some(ref private_key) = config.burner_wallet_private_key {
+        spawn_auto_retrieve_from_keystore(db.clone(), private_key.clone());
+    }
 
     // Initialize Tool Registry with built-in tools
     log::info!("Initializing tool registry");

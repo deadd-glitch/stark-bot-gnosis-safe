@@ -114,8 +114,29 @@ fn contains_query_keyword(text: &str) -> bool {
 }
 
 /// Check if the bot is mentioned in a message
+/// Checks both the mentions array AND the raw content as a fallback,
+/// since Discord's mentions array can sometimes be incomplete when
+/// multiple users are mentioned.
 pub fn is_bot_mentioned(msg: &Message, bot_id: UserId) -> bool {
-    msg.mentions.iter().any(|u| u.id == bot_id)
+    // Primary check: mentions array
+    let in_mentions = msg.mentions.iter().any(|u| u.id == bot_id);
+
+    // Fallback check: look for bot ID pattern in raw content
+    // Discord formats mentions as <@USER_ID> or <@!USER_ID> (with nickname)
+    let bot_mention_pattern = format!("<@{}>", bot_id);
+    let bot_mention_nick_pattern = format!("<@!{}>", bot_id);
+    let in_content = msg.content.contains(&bot_mention_pattern)
+        || msg.content.contains(&bot_mention_nick_pattern);
+
+    if in_content && !in_mentions {
+        log::warn!(
+            "Discord hooks: Bot mention found in content but NOT in mentions array! content='{}', mentions={:?}",
+            if msg.content.len() > 100 { format!("{}...", &msg.content[..100]) } else { msg.content.clone() },
+            msg.mentions.iter().map(|u| u.id.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    in_mentions || in_content
 }
 
 /// Extract command text from a message, removing bot mentions
@@ -162,6 +183,14 @@ pub async fn process(
         log::debug!("Discord hooks: Ignoring reply from {}", msg.author.name);
         return Ok(ProcessResult::not_handled());
     }
+
+    // Debug logging for mention analysis
+    log::info!(
+        "Discord hooks: Message from {} - mentions={:?}, content_preview='{}'",
+        msg.author.name,
+        msg.mentions.iter().map(|u| format!("{}({})", u.name, u.id)).collect::<Vec<_>>(),
+        if msg.content.len() > 100 { format!("{}...", &msg.content[..100]) } else { msg.content.clone() }
+    );
 
     // Check if bot is mentioned
     if !is_bot_mentioned(msg, bot_id) {

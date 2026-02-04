@@ -351,19 +351,11 @@ impl DiscordHandler {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
 
-                        // say_to_user messages are sent as permanent new messages, not status updates
-                        // (same behavior for admin and non-admin queries)
-                        if tool_name == "say_to_user" && success && !content.is_empty() {
-                            let display_content = if content.len() > 2000 {
-                                format!("{}...", &content[..1997])
-                            } else {
-                                content.to_string()
-                            };
-                            // Send as a new permanent message (not editable status)
-                            if let Err(e) = discord_channel_id.say(&http, &display_content).await {
-                                log::error!("Discord: Failed to send say_to_user message: {}", e);
-                            }
-                            None // Don't update status message
+                        // say_to_user messages: skip sending via event stream for gateway channels
+                        // because the final response already contains this content.
+                        // Sending here would cause duplicate messages.
+                        if tool_name == "say_to_user" {
+                            None // Don't send - final response will handle it
                         } else {
                             format_tool_result_for_discord(tool_name, success, duration_ms, content, output_config.tool_result_verbosity)
                         }

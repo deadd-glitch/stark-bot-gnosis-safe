@@ -195,15 +195,11 @@ pub async fn start_telegram_listener(
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("");
 
-                                    // say_to_user messages are displayed directly without tool result formatting
-                                    if tool_name == "say_to_user" && success && !content.is_empty() {
-                                        // Truncate if too long for Telegram (4096 char limit)
-                                        let display_content = if content.len() > 4000 {
-                                            format!("{}...", &content[..4000])
-                                        } else {
-                                            content.to_string()
-                                        };
-                                        Some(display_content)
+                                    // say_to_user messages: skip sending via event stream for gateway channels
+                                    // because the final response already contains this content.
+                                    // Sending here would cause duplicate messages.
+                                    if tool_name == "say_to_user" {
+                                        None // Don't send - final response will handle it
                                     } else {
                                         Some(format_tool_result_for_telegram(tool_name, success, duration_ms, content))
                                     }

@@ -1,5 +1,6 @@
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use crate::ai::ArchetypeId;
+use crate::keystore_client::{KEYSTORE_CLIENT, DEFAULT_KEYSTORE_URL};
 use crate::models::{AgentSettings, AgentSettingsResponse, UpdateAgentSettingsRequest, UpdateBotSettingsRequest};
 use crate::tools::rpc_config;
 use crate::AppState;
@@ -242,6 +243,13 @@ pub async fn update_bot_settings(
         }
     }
 
+    // Update KEYSTORE_CLIENT URL if keystore_url is being changed
+    if let Some(ref url) = request.keystore_url {
+        let new_url = if url.is_empty() { DEFAULT_KEYSTORE_URL } else { url.as_str() };
+        KEYSTORE_CLIENT.set_base_url(new_url).await;
+        log::info!("Keystore URL updated to: {}", new_url);
+    }
+
     match state.db.update_bot_settings_full(
         request.bot_name.as_deref(),
         request.bot_email.as_deref(),
@@ -251,6 +259,7 @@ pub async fn update_bot_settings(
         request.max_tool_iterations,
         request.rogue_mode_enabled,
         request.safe_mode_max_queries_per_10min,
+        request.keystore_url.as_deref(),
     ) {
         Ok(settings) => {
             log::info!(
@@ -263,6 +272,60 @@ pub async fn update_bot_settings(
         }
         Err(e) => {
             log::error!("Failed to update bot settings: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }))
+        }
+    }
+}
+
+/// Get auto-sync status for the current wallet
+pub async fn get_auto_sync_status(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&state, &req) {
+        return resp;
+    }
+
+    // Get wallet address from config
+    let wallet_address = match &state.config.burner_wallet_private_key {
+        Some(pk) => match crate::keystore_client::get_wallet_address(pk) {
+            Ok(addr) => addr.to_lowercase(),
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "error": format!("Failed to get wallet address: {}", e)
+                }));
+            }
+        },
+        None => {
+            return HttpResponse::Ok().json(serde_json::json!({
+                "status": null,
+                "message": "No wallet configured",
+                "keystore_url": KEYSTORE_CLIENT.get_base_url().await
+            }));
+        }
+    };
+
+    match state.db.get_auto_sync_status(&wallet_address) {
+        Ok(Some(status)) => {
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": status.status,
+                "message": status.message,
+                "synced_at": status.synced_at,
+                "key_count": status.key_count,
+                "node_count": status.node_count,
+                "keystore_url": KEYSTORE_CLIENT.get_base_url().await
+            }))
+        }
+        Ok(None) => {
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": null,
+                "message": "No auto-sync has been attempted yet",
+                "keystore_url": KEYSTORE_CLIENT.get_base_url().await
+            }))
+        }
+        Err(e) => {
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "error": format!("Database error: {}", e)
             }))
@@ -322,5 +385,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::resource("/api/rpc-providers")
             .route(web::get().to(get_rpc_providers))
+    );
+    cfg.service(
+        web::resource("/api/auto-sync-status")
+            .route(web::get().to(get_auto_sync_status))
     );
 }

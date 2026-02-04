@@ -1,4 +1,4 @@
 pub mod sqlite;
 pub mod tables;
 
-pub use sqlite::{Database, DbConn};
+pub use sqlite::{AutoSyncStatus, Database, DbConn};
