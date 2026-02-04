@@ -22,6 +22,7 @@ import ApiKeys from '@/pages/ApiKeys';
 import Payments from '@/pages/Payments';
 import EIP8004 from '@/pages/EIP8004';
 import CryptoTransactions from '@/pages/CryptoTransactions';
+import MindMap from '@/pages/MindMap';
 
 function App() {
   return (
@@ -39,6 +40,7 @@ function App() {
         <Route path="/api-keys" element={<ApiKeys />} />
         <Route path="/sessions" element={<Sessions />} />
         <Route path="/memories" element={<MemoryBrowser />} />
+        <Route path="/mindmap" element={<MindMap />} />
         <Route path="/identities" element={<Identities />} />
         <Route path="/identities/:identityId" element={<IdentityDetail />} />
         <Route path="/files" element={<FileBrowser />} />

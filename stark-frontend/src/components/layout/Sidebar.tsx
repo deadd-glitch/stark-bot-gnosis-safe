@@ -21,6 +21,7 @@ import {
   Sparkles,
   BookOpen,
   Wallet,
+  Network,
 } from 'lucide-react';
 import NavItem from './NavItem';
 import { useAuth } from '@/hooks/useAuth';
@@ -82,6 +83,7 @@ export default function Sidebar() {
           </p>
           <NavItem to="/sessions" icon={Calendar} label="Chat Sessions" />
           <NavItem to="/memories" icon={Brain} label="Memory Browser" />
+          <NavItem to="/mindmap" icon={Network} label="Mind Map" />
           <NavItem to="/identities" icon={Users} label="Identities" />
           <NavItem to="/files" icon={FolderOpen} label="Files" />
           <NavItem to="/system-files" icon={Sparkles} label="System Files" />

@@ -4,6 +4,17 @@ import clsx from 'clsx';
 import { useGateway } from '@/hooks/useGateway';
 import type { ExecutionTask, ExecutionEvent } from '@/types';
 
+// Web channel ID - must match backend WEB_CHANNEL_ID
+const WEB_CHANNEL_ID = 0;
+
+// Helper to check if an event is for the web channel
+function isWebChannelEvent(data: unknown): boolean {
+  if (typeof data !== 'object' || data === null) return true; // Allow events without channel_id
+  const event = data as { channel_id?: number };
+  // Accept events with no channel_id (legacy) or channel_id === 0 (web channel)
+  return event.channel_id === undefined || event.channel_id === WEB_CHANNEL_ID;
+}
+
 interface RunningTool {
   name: string;
   startTime: number;
@@ -35,6 +46,9 @@ export default function ExecutionProgress({ className }: ExecutionProgressProps)
   }, []);
 
   const handleExecutionStarted = useCallback((data: unknown) => {
+    // Filter out events from other channels (e.g., Discord, Telegram)
+    if (!isWebChannelEvent(data)) return;
+
     const event = data as ExecutionEvent;
     if (hideTimeoutRef.current) {
       clearTimeout(hideTimeoutRef.current);
@@ -57,6 +71,9 @@ export default function ExecutionProgress({ className }: ExecutionProgressProps)
   }, []);
 
   const handleExecutionThinking = useCallback((data: unknown) => {
+    // Filter out events from other channels (e.g., Discord, Telegram)
+    if (!isWebChannelEvent(data)) return;
+
     const event = data as ExecutionEvent;
     updateExecution(event.execution_id, (execution) => ({
       ...execution,
@@ -65,6 +82,9 @@ export default function ExecutionProgress({ className }: ExecutionProgressProps)
   }, [updateExecution]);
 
   const handleTaskStarted = useCallback((data: unknown) => {
+    // Filter out events from other channels (e.g., Discord, Telegram)
+    if (!isWebChannelEvent(data)) return;
+
     const event = data as ExecutionEvent;
     const newTask: ExecutionTask = {
       id: event.task_id || crypto.randomUUID(),
@@ -94,6 +114,9 @@ export default function ExecutionProgress({ className }: ExecutionProgressProps)
   }, [updateExecution]);
 
   const handleTaskUpdated = useCallback((data: unknown) => {
+    // Filter out events from other channels (e.g., Discord, Telegram)
+    if (!isWebChannelEvent(data)) return;
+
     const event = data as ExecutionEvent;
     if (!event.task_id) return;
 
@@ -125,6 +148,9 @@ export default function ExecutionProgress({ className }: ExecutionProgressProps)
   }, [updateExecution]);
 
   const handleTaskCompleted = useCallback((data: unknown) => {
+    // Filter out events from other channels (e.g., Discord, Telegram)
+    if (!isWebChannelEvent(data)) return;
+
     const event = data as ExecutionEvent;
     if (!event.task_id) return;
 
@@ -148,6 +174,9 @@ export default function ExecutionProgress({ className }: ExecutionProgressProps)
   }, [updateExecution]);
 
   const handleExecutionCompleted = useCallback((data: unknown) => {
+    // Filter out events from other channels (e.g., Discord, Telegram)
+    if (!isWebChannelEvent(data)) return;
+
     const event = data as ExecutionEvent;
 
     updateExecution(event.execution_id, (execution) => ({
@@ -173,6 +202,9 @@ export default function ExecutionProgress({ className }: ExecutionProgressProps)
 
   // Handle tool execution start
   const handleToolExecution = useCallback((data: unknown) => {
+    // Filter out events from other channels (e.g., Discord, Telegram)
+    if (!isWebChannelEvent(data)) return;
+
     const event = data as { tool_name: string };
     console.log('[ExecutionProgress] Tool execution started:', event.tool_name);
     setRunningTool({
@@ -188,6 +220,9 @@ export default function ExecutionProgress({ className }: ExecutionProgressProps)
 
   // Handle tool result (clear running tool)
   const handleToolResult = useCallback((data: unknown) => {
+    // Filter out events from other channels (e.g., Discord, Telegram)
+    if (!isWebChannelEvent(data)) return;
+
     const event = data as { tool_name: string };
     console.log('[ExecutionProgress] Tool result received:', event.tool_name);
     setRunningTool(null);

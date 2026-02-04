@@ -23,6 +23,7 @@ import {
   BookOpen,
   X,
   Wallet,
+  Network,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '@/hooks/useAuth';
@@ -104,6 +105,7 @@ export default function MobileNavDrawer({ isOpen, onClose }: MobileNavDrawerProp
   const dataItems = [
     { to: '/sessions', icon: Calendar, label: 'Chat Sessions' },
     { to: '/memories', icon: Brain, label: 'Memory Browser' },
+    { to: '/mindmap', icon: Network, label: 'Mind Map' },
     { to: '/identities', icon: Users, label: 'Identities' },
     { to: '/files', icon: FolderOpen, label: 'Files' },
     { to: '/system-files', icon: Sparkles, label: 'System Files' },

@@ -18,3 +18,4 @@ mod heartbeat;      // heartbeat_configs
 mod gmail;          // gmail_configs
 mod agent_contexts; // agent_contexts (multi-agent orchestrator state)
 pub mod broadcasted_transactions; // broadcasted_transactions (crypto tx history)
+pub mod mind_nodes;  // mind_nodes, mind_node_connections (mind map feature)

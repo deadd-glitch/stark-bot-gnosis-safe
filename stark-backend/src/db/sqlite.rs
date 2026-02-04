@@ -918,6 +918,44 @@ impl Database {
             [],
         )?;
 
+        // Mind map nodes table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS mind_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                body TEXT NOT NULL DEFAULT '',
+                position_x REAL,
+                position_y REAL,
+                is_trunk INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            [],
+        )?;
+
+        // Mind map node connections table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS mind_node_connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent_id INTEGER NOT NULL,
+                child_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (parent_id) REFERENCES mind_nodes(id) ON DELETE CASCADE,
+                FOREIGN KEY (child_id) REFERENCES mind_nodes(id) ON DELETE CASCADE,
+                UNIQUE(parent_id, child_id)
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mind_connections_parent ON mind_node_connections(parent_id)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mind_connections_child ON mind_node_connections(child_id)",
+            [],
+        )?;
+
         // Initialize discord_hooks tables
         crate::discord_hooks::db::init_tables(&conn)?;
 
