@@ -10,6 +10,7 @@ export default function CloudBackup() {
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [confirmBackupModalOpen, setConfirmBackupModalOpen] = useState(false);
+  const [confirmRestoreModalOpen, setConfirmRestoreModalOpen] = useState(false);
   const [previewData, setPreviewData] = useState<CloudBackupPreview | null>(null);
   const [noBackupWarning, setNoBackupWarning] = useState(false);
 
@@ -75,7 +76,12 @@ export default function CloudBackup() {
     }
   };
 
-  const handleDownloadBackup = async () => {
+  const handleDownloadBackup = () => {
+    setConfirmRestoreModalOpen(true);
+  };
+
+  const confirmAndRestoreBackup = async () => {
+    setConfirmRestoreModalOpen(false);
     setIsDownloading(true);
     setMessage(null);
 
@@ -427,6 +433,98 @@ export default function CloudBackup() {
               >
                 <Upload className="w-4 h-4 mr-2" />
                 Continue
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restore Confirmation Modal */}
+      {confirmRestoreModalOpen && previewData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setConfirmRestoreModalOpen(false)}
+          />
+          {/* Modal */}
+          <div className="relative bg-slate-800 border border-orange-500/50 rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-orange-500/20 rounded-lg">
+                  <AlertTriangle className="w-5 h-5 text-orange-400" />
+                </div>
+                <h2 className="text-lg font-semibold text-white">Confirm Restore</h2>
+              </div>
+              <button
+                onClick={() => setConfirmRestoreModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {/* Content */}
+            <div className="p-6">
+              <div className="mb-4 p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+                <p className="text-sm text-orange-300">
+                  <strong>Warning:</strong> Restoring from backup will overwrite your existing data.
+                  This action cannot be undone.
+                </p>
+              </div>
+
+              <p className="text-slate-300 mb-4">
+                The following data will be restored:
+              </p>
+
+              {/* Preview Stats */}
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                <div className="flex items-center gap-2 p-2 bg-slate-900/50 rounded-lg">
+                  <Key className="w-4 h-4 text-stark-400" />
+                  <span className="text-sm text-slate-300">{previewData.key_count} API Keys</span>
+                </div>
+                <div className="flex items-center gap-2 p-2 bg-slate-900/50 rounded-lg">
+                  <Brain className="w-4 h-4 text-purple-400" />
+                  <span className="text-sm text-slate-300">{previewData.node_count || 0} Mind Nodes</span>
+                </div>
+                <div className="flex items-center gap-2 p-2 bg-slate-900/50 rounded-lg">
+                  <Link2 className="w-4 h-4 text-blue-400" />
+                  <span className="text-sm text-slate-300">{previewData.connection_count || 0} Connections</span>
+                </div>
+                <div className="flex items-center gap-2 p-2 bg-slate-900/50 rounded-lg">
+                  <Clock className="w-4 h-4 text-orange-400" />
+                  <span className="text-sm text-slate-300">{previewData.cron_job_count || 0} Cron Jobs</span>
+                </div>
+                {previewData.has_settings && (
+                  <div className="flex items-center gap-2 p-2 bg-slate-900/50 rounded-lg">
+                    <Settings className="w-4 h-4 text-green-400" />
+                    <span className="text-sm text-slate-300">Bot Settings</span>
+                  </div>
+                )}
+                {previewData.has_heartbeat && (
+                  <div className="flex items-center gap-2 p-2 bg-slate-900/50 rounded-lg">
+                    <Heart className="w-4 h-4 text-red-400" />
+                    <span className="text-sm text-slate-300">Heartbeat Config</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            {/* Footer */}
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-700 bg-slate-900/30">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setConfirmRestoreModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={confirmAndRestoreBackup}
+                className="bg-orange-500 hover:bg-orange-600"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Restore Data
               </Button>
             </div>
           </div>

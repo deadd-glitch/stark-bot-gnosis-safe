@@ -298,6 +298,14 @@ impl Database {
         Ok(rows_affected > 0)
     }
 
+    /// Clear all cron jobs for restore
+    /// Returns the number of jobs deleted
+    pub fn clear_cron_jobs_for_restore(&self) -> SqliteResult<usize> {
+        let conn = self.conn();
+        let rows_deleted = conn.execute("DELETE FROM cron_jobs", [])?;
+        Ok(rows_deleted)
+    }
+
     /// Log a cron job run
     pub fn log_cron_job_run(
         &self,

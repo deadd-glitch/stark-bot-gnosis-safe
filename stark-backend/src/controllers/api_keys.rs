@@ -1049,12 +1049,44 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
         }
     }
 
+    // Clear existing mind nodes and connections before restore
+    match state.db.clear_mind_nodes_for_restore() {
+        Ok((nodes_deleted, connections_deleted)) => {
+            log::info!("Cleared {} nodes and {} connections for restore", nodes_deleted, connections_deleted);
+        }
+        Err(e) => {
+            log::warn!("Failed to clear mind nodes for restore: {}", e);
+        }
+    }
+
+    // Clear existing cron jobs before restore
+    match state.db.clear_cron_jobs_for_restore() {
+        Ok(jobs_deleted) => {
+            log::info!("Cleared {} cron jobs for restore", jobs_deleted);
+        }
+        Err(e) => {
+            log::warn!("Failed to clear cron jobs for restore: {}", e);
+        }
+    }
+
     // Restore mind map nodes with ID mapping
-    // Note: trunk nodes are auto-managed, so we skip is_trunk during restoration
+    // Get or create trunk node and map backup trunk ID to current trunk ID
     let mut old_to_new_id: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let current_trunk = state.db.get_or_create_trunk_node().ok();
+
+    // Find trunk in backup and map its ID to current trunk ID
+    if let Some(ref trunk) = current_trunk {
+        for node in &backup_data.mind_map_nodes {
+            if node.is_trunk {
+                old_to_new_id.insert(node.id, trunk.id);
+                break;
+            }
+        }
+    }
+
     let mut restored_nodes = 0;
     for node in &backup_data.mind_map_nodes {
-        // Skip trunk nodes - they're auto-managed
+        // Skip trunk nodes - they're auto-managed (already mapped above)
         if node.is_trunk {
             continue;
         }
@@ -1072,10 +1104,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 restored_nodes += 1;
             }
             Err(e) => {
-                // Skip duplicates
-                if !e.to_string().contains("UNIQUE constraint") {
-                    log::warn!("Failed to restore mind node: {}", e);
-                }
+                log::warn!("Failed to restore mind node: {}", e);
             }
         }
     }
@@ -1089,11 +1118,14 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             match state.db.create_mind_node_connection(parent_id, child_id) {
                 Ok(_) => restored_connections += 1,
                 Err(e) => {
-                    if !e.to_string().contains("UNIQUE constraint") {
-                        log::warn!("Failed to restore connection: {}", e);
-                    }
+                    log::warn!("Failed to restore connection: {}", e);
                 }
             }
+        } else {
+            log::warn!(
+                "Could not map connection parent_id={} child_id={} (mapped: parent={:?}, child={:?})",
+                conn.parent_id, conn.child_id, new_parent_id, new_child_id
+            );
         }
     }
 
@@ -1121,7 +1153,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
         }
     }
 
-    // Restore cron jobs
+    // Restore cron jobs (already cleared above)
     let mut restored_cron_jobs = 0;
     for job in &backup_data.cron_jobs {
         match state.db.create_cron_job(
@@ -1143,10 +1175,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
         ) {
             Ok(_) => restored_cron_jobs += 1,
             Err(e) => {
-                // Skip duplicates (name is unique)
-                if !e.to_string().contains("UNIQUE constraint") {
-                    log::warn!("Failed to restore cron job {}: {}", job.name, e);
-                }
+                log::warn!("Failed to restore cron job {}: {}", job.name, e);
             }
         }
     }

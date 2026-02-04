@@ -302,6 +302,20 @@ impl Database {
         Ok(rows_affected > 0)
     }
 
+    /// Clear all mind nodes (except trunk) and connections for restore
+    /// Returns the number of nodes and connections deleted
+    pub fn clear_mind_nodes_for_restore(&self) -> SqliteResult<(usize, usize)> {
+        let conn = self.conn();
+
+        // Delete all connections first (foreign key constraint)
+        let connections_deleted = conn.execute("DELETE FROM mind_node_connections", [])?;
+
+        // Delete all non-trunk nodes
+        let nodes_deleted = conn.execute("DELETE FROM mind_nodes WHERE is_trunk = 0", [])?;
+
+        Ok((nodes_deleted, connections_deleted))
+    }
+
     /// Get the full mind map graph (nodes + connections)
     pub fn get_mind_graph(&self) -> SqliteResult<MindGraphResponse> {
         // Ensure trunk exists
