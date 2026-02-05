@@ -41,6 +41,7 @@ interface ChannelFormData {
   name: string;
   bot_token: string;
   app_token: string;
+  settings: Record<string, string>;
 }
 
 const emptyForm: ChannelFormData = {
@@ -48,9 +49,10 @@ const emptyForm: ChannelFormData = {
   name: '',
   bot_token: '',
   app_token: '',
+  settings: {},
 };
 
-// Settings toggle with gear icon
+// Settings toggle with gear icon - now opens edit modal
 function SettingsToggle({
   enabled,
   onToggle,
@@ -64,7 +66,7 @@ function SettingsToggle({
       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
         enabled ? 'bg-stark-500' : 'bg-slate-600'
       }`}
-      title={enabled ? 'Hide settings' : 'Show settings'}
+      title={enabled ? 'Close settings' : 'Edit channel settings'}
     >
       <span
         className={`inline-flex h-5 w-5 items-center justify-center rounded-full bg-white transition-transform ${
@@ -83,15 +85,12 @@ export default function Channels() {
   const [error, setError] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newChannel, setNewChannel] = useState<ChannelFormData>(emptyForm);
+  const [newChannelSchema, setNewChannelSchema] = useState<ChannelSettingDefinition[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<ChannelFormData>(emptyForm);
+  const [editSchema, setEditSchema] = useState<ChannelSettingDefinition[]>([]);
+  const [editLoading, setEditLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
-
-  // Settings mode state
-  const [settingsMode, setSettingsMode] = useState<number | null>(null);
-  const [settingsSchema, setSettingsSchema] = useState<ChannelSettingDefinition[]>([]);
-  const [settingsValues, setSettingsValues] = useState<Record<string, string>>({});
-  const [settingsLoading, setSettingsLoading] = useState(false);
 
   const fetchChannels = async () => {
     try {
@@ -122,13 +121,23 @@ export default function Channels() {
 
     setActionLoading(-1);
     try {
-      await createChannel({
+      const createdChannel = await createChannel({
         channel_type: newChannel.channel_type,
         name: newChannel.name,
         bot_token: newChannel.bot_token,
         app_token: newChannel.channel_type === 'slack' ? newChannel.app_token : undefined,
       });
+
+      // Save settings if any were configured
+      const settingsToSave = Object.entries(newChannel.settings)
+        .filter(([, value]) => value.trim() !== '')
+        .map(([key, value]) => ({ key, value }));
+      if (settingsToSave.length > 0) {
+        await updateChannelSettings(createdChannel.id, settingsToSave);
+      }
+
       setNewChannel(emptyForm);
+      setNewChannelSchema([]);
       setShowAddForm(false);
       await fetchChannels();
     } catch (e) {
@@ -138,15 +147,36 @@ export default function Channels() {
     }
   };
 
+  // Fetch settings schema when channel type changes (for new channel form)
+  const handleChannelTypeChange = async (channelType: string) => {
+    setNewChannel({ ...newChannel, channel_type: channelType, settings: {} });
+    try {
+      const schema = await getChannelSettingsSchema(channelType);
+      setNewChannelSchema(schema);
+    } catch (e) {
+      setNewChannelSchema([]);
+    }
+  };
+
   const handleUpdate = async (id: number) => {
     setActionLoading(id);
     try {
+      // Update channel data
       await updateChannel(id, {
         name: editForm.name || undefined,
         bot_token: editForm.bot_token || undefined,
         app_token: editForm.app_token || undefined,
       });
+
+      // Update settings
+      const settingsToSave = Object.entries(editForm.settings).map(([key, value]) => ({
+        key,
+        value,
+      }));
+      await updateChannelSettings(id, settingsToSave);
+
       setEditingId(null);
+      setEditSchema([]);
       await fetchChannels();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update channel');
@@ -193,29 +223,18 @@ export default function Channels() {
     }
   };
 
-  const startEditing = (channel: ChannelInfo) => {
-    setEditingId(channel.id);
-    setEditForm({
-      channel_type: channel.channel_type,
-      name: channel.name,
-      bot_token: channel.bot_token,
-      app_token: channel.app_token || '',
-    });
-  };
-
-  // Toggle settings mode for a channel
-  const toggleSettingsMode = async (channel: ChannelInfo) => {
-    if (settingsMode === channel.id) {
-      // Close settings mode
-      setSettingsMode(null);
-      setSettingsSchema([]);
-      setSettingsValues({});
+  // Toggle edit mode for a channel (opens modal with channel data + settings)
+  const toggleEditMode = async (channel: ChannelInfo) => {
+    if (editingId === channel.id) {
+      // Close edit mode
+      setEditingId(null);
+      setEditSchema([]);
       return;
     }
 
-    // Open settings mode
-    setSettingsLoading(true);
-    setSettingsMode(channel.id);
+    // Open edit mode and load data
+    setEditLoading(true);
+    setEditingId(channel.id);
 
     try {
       // Load schema and current values in parallel
@@ -224,40 +243,26 @@ export default function Channels() {
         getChannelSettings(channel.id),
       ]);
 
-      setSettingsSchema(schema);
+      setEditSchema(schema);
 
       // Convert current settings array to a key-value map
-      const valuesMap: Record<string, string> = {};
+      const settingsMap: Record<string, string> = {};
       currentSettings.forEach((s: ChannelSetting) => {
-        valuesMap[s.setting_key] = s.setting_value;
+        settingsMap[s.setting_key] = s.setting_value;
       });
-      setSettingsValues(valuesMap);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load settings');
-      setSettingsMode(null);
-    } finally {
-      setSettingsLoading(false);
-    }
-  };
 
-  // Save channel settings
-  const saveSettings = async (channelId: number) => {
-    setActionLoading(channelId);
-    try {
-      const settingsArray = Object.entries(settingsValues).map(([key, value]) => ({
-        key,
-        value,
-      }));
-      await updateChannelSettings(channelId, settingsArray);
-      setError(null);
-      // Close settings mode after successful save
-      setSettingsMode(null);
-      setSettingsSchema([]);
-      setSettingsValues({});
+      setEditForm({
+        channel_type: channel.channel_type,
+        name: channel.name,
+        bot_token: channel.bot_token,
+        app_token: channel.app_token || '',
+        settings: settingsMap,
+      });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save settings');
+      setError(e instanceof Error ? e.message : 'Failed to load channel data');
+      setEditingId(null);
     } finally {
-      setActionLoading(null);
+      setEditLoading(false);
     }
   };
 
@@ -312,7 +317,7 @@ export default function Channels() {
                 <label className="block text-sm font-medium text-slate-300 mb-2">Channel Type</label>
                 <select
                   value={newChannel.channel_type}
-                  onChange={(e) => setNewChannel({ ...newChannel, channel_type: e.target.value })}
+                  onChange={(e) => handleChannelTypeChange(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-stark-500 focus:border-transparent"
                 >
                   {CHANNEL_TYPES.map(type => (
@@ -340,8 +345,35 @@ export default function Channels() {
                   placeholder="xapp-..."
                 />
               )}
+              {/* Settings section for new channel */}
+              {newChannelSchema.length > 0 && (
+                <>
+                  <div className="border-t border-slate-700 pt-4 mt-4">
+                    <h4 className="text-sm font-medium text-slate-300 mb-3">Settings</h4>
+                  </div>
+                  {newChannelSchema.map((setting) => (
+                    <div key={setting.key}>
+                      <Input
+                        label={setting.label}
+                        value={newChannel.settings[setting.key] || ''}
+                        onChange={(e) =>
+                          setNewChannel({
+                            ...newChannel,
+                            settings: {
+                              ...newChannel.settings,
+                              [setting.key]: e.target.value,
+                            },
+                          })
+                        }
+                        placeholder={setting.placeholder}
+                      />
+                      <p className="mt-1 text-xs text-slate-500">{setting.description}</p>
+                    </div>
+                  ))}
+                </>
+              )}
               <div className="flex gap-2 justify-end">
-                <Button variant="secondary" onClick={() => setShowAddForm(false)}>
+                <Button variant="secondary" onClick={() => { setShowAddForm(false); setNewChannelSchema([]); }}>
                   Cancel
                 </Button>
                 <Button onClick={handleCreate} disabled={actionLoading === -1}>
@@ -389,8 +421,8 @@ export default function Channels() {
                         {channel.running ? 'Running' : 'Stopped'}
                       </span>
                       <SettingsToggle
-                        enabled={settingsMode === channel.id}
-                        onToggle={() => toggleSettingsMode(channel)}
+                        enabled={isEditing}
+                        onToggle={() => toggleEditMode(channel)}
                       />
                       {channel.running ? (
                         <Button
@@ -426,88 +458,80 @@ export default function Channels() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {settingsMode === channel.id ? (
-                    // Settings mode view
+                  {isEditing ? (
+                    // Edit mode - unified form with channel data + settings
                     <div className="space-y-4">
-                      {settingsLoading ? (
+                      {editLoading ? (
                         <div className="flex items-center justify-center py-4">
                           <div className="w-5 h-5 border-2 border-stark-500 border-t-transparent rounded-full animate-spin" />
-                          <span className="ml-2 text-slate-400">Loading settings...</span>
-                        </div>
-                      ) : settingsSchema.length === 0 ? (
-                        <div className="text-center py-4 text-slate-400">
-                          No configurable settings for {channel.channel_type} channels.
+                          <span className="ml-2 text-slate-400">Loading...</span>
                         </div>
                       ) : (
                         <>
-                          {settingsSchema.map((setting) => (
-                            <div key={setting.key}>
-                              <Input
-                                label={setting.label}
-                                value={settingsValues[setting.key] || ''}
-                                onChange={(e) =>
-                                  setSettingsValues({
-                                    ...settingsValues,
-                                    [setting.key]: e.target.value,
-                                  })
-                                }
-                                placeholder={setting.placeholder}
-                              />
-                              <p className="mt-1 text-xs text-slate-500">{setting.description}</p>
-                            </div>
-                          ))}
+                          <Input
+                            label="Name"
+                            value={editForm.name}
+                            onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                          />
+                          <Input
+                            label="Bot Token"
+                            value={editForm.bot_token}
+                            onChange={(e) => setEditForm({ ...editForm, bot_token: e.target.value })}
+                          />
+                          {channel.channel_type === 'slack' && (
+                            <Input
+                              label="App Token"
+                              value={editForm.app_token}
+                              onChange={(e) => setEditForm({ ...editForm, app_token: e.target.value })}
+                            />
+                          )}
+                          {/* Settings section */}
+                          {editSchema.length > 0 && (
+                            <>
+                              <div className="border-t border-slate-700 pt-4 mt-4">
+                                <h4 className="text-sm font-medium text-slate-300 mb-3">Settings</h4>
+                              </div>
+                              {editSchema.map((setting) => (
+                                <div key={setting.key}>
+                                  <Input
+                                    label={setting.label}
+                                    value={editForm.settings[setting.key] || ''}
+                                    onChange={(e) =>
+                                      setEditForm({
+                                        ...editForm,
+                                        settings: {
+                                          ...editForm.settings,
+                                          [setting.key]: e.target.value,
+                                        },
+                                      })
+                                    }
+                                    placeholder={setting.placeholder}
+                                  />
+                                  <p className="mt-1 text-xs text-slate-500">{setting.description}</p>
+                                </div>
+                              ))}
+                            </>
+                          )}
                           <div className="flex gap-2 justify-end pt-2">
                             <Button
                               variant="secondary"
                               onClick={() => {
-                                setSettingsMode(null);
-                                setSettingsSchema([]);
-                                setSettingsValues({});
+                                setEditingId(null);
+                                setEditSchema([]);
                               }}
                             >
                               Cancel
                             </Button>
-                            <Button
-                              onClick={() => saveSettings(channel.id)}
-                              disabled={isActionLoading}
-                            >
+                            <Button onClick={() => handleUpdate(channel.id)} disabled={isActionLoading}>
                               <Save className="w-4 h-4 mr-1" />
-                              Save Settings
+                              Save
                             </Button>
                           </div>
                         </>
                       )}
                     </div>
-                  ) : isEditing ? (
-                    <div className="space-y-4">
-                      <Input
-                        label="Name"
-                        value={editForm.name}
-                        onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                      />
-                      <Input
-                        label="Bot Token"
-                        value={editForm.bot_token}
-                        onChange={(e) => setEditForm({ ...editForm, bot_token: e.target.value })}
-                      />
-                      {channel.channel_type === 'slack' && (
-                        <Input
-                          label="App Token"
-                          value={editForm.app_token}
-                          onChange={(e) => setEditForm({ ...editForm, app_token: e.target.value })}
-                        />
-                      )}
-                      <div className="flex gap-2 justify-end">
-                        <Button variant="secondary" onClick={() => setEditingId(null)}>
-                          Cancel
-                        </Button>
-                        <Button onClick={() => handleUpdate(channel.id)} disabled={isActionLoading}>
-                          <Save className="w-4 h-4 mr-1" />
-                          Save
-                        </Button>
-                      </div>
-                    </div>
                   ) : (
+                    // View mode - display channel info
                     <div className="space-y-3">
                       <div>
                         <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1">Bot Token</label>
@@ -528,11 +552,6 @@ export default function Channels() {
                           </code>
                         </div>
                       )}
-                      <div className="flex justify-end">
-                        <Button variant="secondary" size="sm" onClick={() => startEditing(channel)}>
-                          Edit
-                        </Button>
-                      </div>
                     </div>
                   )}
                 </CardContent>
