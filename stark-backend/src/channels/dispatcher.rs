@@ -2111,11 +2111,18 @@ impl MessageDispatcher {
                             }
                         }
 
-                        // In safe mode, say_to_user is a terminating action - complete the loop after it
-                        if is_safe_mode && call.name == "say_to_user" && result.success {
-                            log::info!("[ORCHESTRATED_LOOP] say_to_user called in safe mode, terminating loop");
-                            orchestrator_complete = true;
-                            final_summary = result.content.clone();
+                        // say_to_user with finished_task=true terminates the loop (any mode)
+                        // In safe mode, say_to_user always terminates (no ongoing tasks)
+                        if call.name == "say_to_user" && result.success {
+                            let finished_task = result.metadata.as_ref()
+                                .and_then(|m| m.get("finished_task"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            if finished_task || is_safe_mode {
+                                log::info!("[ORCHESTRATED_LOOP] say_to_user terminating loop (finished_task={}, safe_mode={})", finished_task, is_safe_mode);
+                                orchestrator_complete = true;
+                                final_summary = result.content.clone();
+                            }
                         }
 
                         // Extract duration_ms from metadata if available
@@ -2222,7 +2229,7 @@ impl MessageDispatcher {
             }
             self.broadcast_session_complete(original_message.channel_id, session_id);
         } else if orchestrator_complete && !waiting_for_user_response {
-            // Session completed successfully (via say_to_user in safe mode, task_fully_completed, etc.)
+            // Session completed successfully (via say_to_user with finished_task, task_fully_completed, etc.)
             log::info!("[ORCHESTRATED_LOOP] Marking session {} as Complete", session_id);
             if let Err(e) = self.db.update_session_completion_status(session_id, CompletionStatus::Complete) {
                 log::error!("[ORCHESTRATED_LOOP] Failed to update session completion status: {}", e);
@@ -2739,11 +2746,18 @@ impl MessageDispatcher {
                                     }
                                 }
 
-                                // In safe mode, say_to_user is a terminating action - complete the loop after it
-                                if is_safe_mode && tool_call.tool_name == "say_to_user" && result.success {
-                                    log::info!("[TEXT_ORCHESTRATED] say_to_user called in safe mode, terminating loop");
-                                    orchestrator_complete = true;
-                                    final_response = result.content.clone();
+                                // say_to_user with finished_task=true terminates the loop (any mode)
+                                // In safe mode, say_to_user always terminates (no ongoing tasks)
+                                if tool_call.tool_name == "say_to_user" && result.success {
+                                    let finished_task = result.metadata.as_ref()
+                                        .and_then(|m| m.get("finished_task"))
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    if finished_task || is_safe_mode {
+                                        log::info!("[TEXT_ORCHESTRATED] say_to_user terminating loop (finished_task={}, safe_mode={})", finished_task, is_safe_mode);
+                                        orchestrator_complete = true;
+                                        final_response = result.content.clone();
+                                    }
                                 }
 
                                 // Extract duration_ms from metadata if available
@@ -2920,7 +2934,7 @@ impl MessageDispatcher {
             }
             self.broadcast_session_complete(original_message.channel_id, session_id);
         } else if orchestrator_complete && !waiting_for_user_response {
-            // Session completed successfully (via say_to_user in safe mode, task_fully_completed, etc.)
+            // Session completed successfully (via say_to_user with finished_task, task_fully_completed, etc.)
             log::info!("[TEXT_ORCHESTRATED] Marking session {} as Complete", session_id);
             if let Err(e) = self.db.update_session_completion_status(session_id, CompletionStatus::Complete) {
                 log::error!("[TEXT_ORCHESTRATED] Failed to update session completion status: {}", e);

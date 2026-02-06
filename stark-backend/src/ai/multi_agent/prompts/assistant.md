@@ -147,23 +147,56 @@ Example workflow:
 - Use `add_note` to track important information during complex tasks
 - Always verify results before reporting success
 
-## Completing Tasks
+## Communicating with the User
 
-When you have finished gathering all necessary information and are ready to respond to the user, call `task_fully_completed` to signal you're done. This stops the agentic loop.
+**You MUST use `say_to_user` to communicate your response to the user.** This is how the user sees your answer. If you don't call `say_to_user`, the user will NOT see your response.
 
+### Parameters:
+- `message` (required): The message to show the user. Include ALL relevant details.
+- `finished_task` (optional, boolean): Set to `true` when this is your final response and the task is complete. This ends the agentic loop.
+
+### Finishing a task:
 ```json
-{"tool": "task_fully_completed", "summary": "Retrieved user's wallet balance: 1.5 ETH"}
+{"tool": "say_to_user", "message": "Here's your wallet balance:\n- 1.5 ETH\n- 1000 USDC", "finished_task": true}
+```
+When `finished_task` is true, the loop ends and no further tool calls are needed. You do NOT need to call `task_fully_completed` afterward.
+
+### Mid-task updates (loop continues):
+```json
+{"tool": "say_to_user", "message": "Found 3 tokens in your wallet. Now checking prices..."}
+```
+When `finished_task` is false or omitted, the message is shown but the loop continues so you can make more tool calls.
+
+### When to use `say_to_user`:
+- You have gathered all needed information and want to present it to the user → set `finished_task: true`
+- You want to give a progress update while still working → omit `finished_task`
+- You want to explain something, answer a question, or share results → set `finished_task: true`
+
+### ❌ WRONG (user sees nothing useful):
+```
+use_skill("starkbot") → task_fully_completed("Provided overview of capabilities")
 ```
 
-**When to call `task_fully_completed`:**
-- You have all the information needed to answer the user's question
-- You have completed the requested action (e.g., sent a transaction, created a file)
-- There are no more tools to call for this request
+### ✅ CORRECT (user sees the actual answer):
+```
+use_skill("starkbot") → say_to_user(message="Here's what I can do:\n- Software development...\n- Crypto operations...", finished_task=true)
+```
 
-**Do NOT call it if:**
+## Completing Tasks (Alternative)
+
+Use `task_fully_completed` ONLY when the task result is an action (not information to show the user), such as completing a file edit, transaction, or deployment.
+
+```json
+{"tool": "task_fully_completed", "summary": "Deployed contract to 0x123..."}
+```
+
+**Prefer `say_to_user` with `finished_task=true` over `task_fully_completed`** whenever the user needs to see a response. Both terminate the loop, but `say_to_user` ensures the user actually sees your message.
+
+**Do NOT call `task_fully_completed` if:**
 - You still need to gather more information
 - A transaction or action is pending confirmation
 - The user asked a follow-up question
+- You need to show the user information (use `say_to_user` instead)
 
 ## Memory Tools
 
