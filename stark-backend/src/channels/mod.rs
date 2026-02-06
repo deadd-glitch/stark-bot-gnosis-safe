@@ -94,7 +94,7 @@ impl ChannelManager {
     }
 
     /// Start a channel listener
-    pub async fn start_channel(&self, channel: Channel) -> Result<(), String> {
+    pub async fn start_channel(&self, mut channel: Channel) -> Result<(), String> {
         let channel_id = channel.id;
         let channel_type = channel.channel_type.clone();
         let channel_name = channel.name.clone();
@@ -102,6 +102,33 @@ impl ChannelManager {
         // Check if already running
         if self.is_running(channel_id) {
             return Err(format!("Channel {} is already running", channel_id));
+        }
+
+        // Load bot_token from channel settings (preferred), fall back to DB column value.
+        // This ensures settings always take precedence over the legacy column.
+        {
+            let setting_key = match channel_type.as_str() {
+                "discord" => "discord_bot_token",
+                "telegram" => "telegram_bot_token",
+                "slack" => "slack_bot_token",
+                _ => "", // Twitter doesn't use bot_token
+            };
+            if !setting_key.is_empty() {
+                if let Ok(Some(token)) = self.db.get_channel_setting(channel_id, setting_key) {
+                    if !token.is_empty() {
+                        channel.bot_token = token;
+                    }
+                }
+            }
+        }
+
+        // Load app_token from channel settings (preferred), fall back to DB column value.
+        if channel_type == "slack" {
+            if let Ok(Some(token)) = self.db.get_channel_setting(channel_id, "slack_app_token") {
+                if !token.is_empty() {
+                    channel.app_token = Some(token);
+                }
+            }
         }
 
         // Create shutdown channel

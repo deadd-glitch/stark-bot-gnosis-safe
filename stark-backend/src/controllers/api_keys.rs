@@ -1424,6 +1424,24 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 if channel.enabled {
                     let _ = state.db.set_channel_enabled(new_channel.id, true);
                 }
+                // Migrate legacy bot_token column → channel setting (backwards compat)
+                if !channel.bot_token.is_empty() {
+                    let setting_key = match channel.channel_type.as_str() {
+                        "discord" => Some("discord_bot_token"),
+                        "telegram" => Some("telegram_bot_token"),
+                        "slack" => Some("slack_bot_token"),
+                        _ => None,
+                    };
+                    if let Some(key) = setting_key {
+                        let _ = state.db.set_channel_setting(new_channel.id, key, &channel.bot_token);
+                    }
+                }
+                // Migrate legacy app_token column → channel setting (backwards compat)
+                if let Some(ref app_token) = channel.app_token {
+                    if !app_token.is_empty() && channel.channel_type == "slack" {
+                        let _ = state.db.set_channel_setting(new_channel.id, "slack_app_token", app_token);
+                    }
+                }
                 restored_channels += 1;
             }
             Err(e) => {

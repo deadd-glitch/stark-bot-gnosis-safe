@@ -373,6 +373,23 @@ async fn restore_backup_data(
         match db.create_channel(&channel.channel_type, &channel.name, &channel.bot_token, channel.app_token.as_deref()) {
             Ok(new_channel) => {
                 old_channel_to_new_id.insert(channel.id, new_channel.id);
+                // Migrate legacy bot_token column → channel setting (backwards compat)
+                if !channel.bot_token.is_empty() {
+                    let setting_key = match channel.channel_type.as_str() {
+                        "discord" => Some("discord_bot_token"),
+                        "telegram" => Some("telegram_bot_token"),
+                        "slack" => Some("slack_bot_token"),
+                        _ => None,
+                    };
+                    if let Some(key) = setting_key {
+                        let _ = db.set_channel_setting(new_channel.id, key, &channel.bot_token);
+                    }
+                }
+                if let Some(ref app_token) = channel.app_token {
+                    if !app_token.is_empty() && channel.channel_type == "slack" {
+                        let _ = db.set_channel_setting(new_channel.id, "slack_app_token", app_token);
+                    }
+                }
                 restored_channels += 1;
             }
             Err(e) => {

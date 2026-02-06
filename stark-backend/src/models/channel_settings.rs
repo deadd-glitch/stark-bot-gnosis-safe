@@ -37,15 +37,29 @@ impl ToolOutputVerbosity {
 pub enum ChannelSettingKey {
     /// Common: Auto-start this channel when the server boots (after restore from backup)
     AutoStartOnBoot,
+    /// Discord: Bot authentication token
+    DiscordBotToken,
     /// Discord: Comma-separated list of Discord user IDs with admin access
     /// If empty, falls back to Discord's built-in Administrator permission
     DiscordAdminUserIds,
+    /// Telegram: Bot authentication token from @BotFather
+    TelegramBotToken,
+    /// Slack: Bot OAuth token (xoxb-...)
+    SlackBotToken,
+    /// Slack: App-level token for Socket Mode (xapp-...)
+    SlackAppToken,
     /// Twitter: Bot's Twitter handle without @ (e.g., "starkbotai")
     TwitterBotHandle,
     /// Twitter: Numeric Twitter user ID (required for mentions API)
     TwitterBotUserId,
     /// Twitter: Poll interval in seconds (min 60, default 120)
     TwitterPollIntervalSecs,
+    /// Twitter: Whether the account has X Premium (allows longer tweets up to 25,000 chars)
+    TwitterPro,
+    /// Twitter: Chance (percentage) of replying to each mention
+    TwitterReplyChance,
+    /// Twitter: Maximum number of mentions to reply to per hour
+    TwitterMaxMentionsPerHour,
 }
 
 impl ChannelSettingKey {
@@ -53,10 +67,17 @@ impl ChannelSettingKey {
     pub fn label(&self) -> &'static str {
         match self {
             Self::AutoStartOnBoot => "Auto-Start on Boot",
+            Self::DiscordBotToken => "Bot Token",
             Self::DiscordAdminUserIds => "Admin User IDs (Optional)",
+            Self::TelegramBotToken => "Bot Token",
+            Self::SlackBotToken => "Bot Token",
+            Self::SlackAppToken => "App Token (Socket Mode)",
             Self::TwitterBotHandle => "Bot Handle",
             Self::TwitterBotUserId => "Bot User ID",
             Self::TwitterPollIntervalSecs => "Poll Interval (seconds)",
+            Self::TwitterPro => "X Premium (Pro)",
+            Self::TwitterReplyChance => "Reply Chance",
+            Self::TwitterMaxMentionsPerHour => "Max Replies Per Hour",
         }
     }
 
@@ -67,11 +88,27 @@ impl ChannelSettingKey {
                 "Automatically start this channel when the server boots or restores from backup. \
                  Useful for ensuring your bot is always running after container updates."
             }
+            Self::DiscordBotToken => {
+                "Your Discord bot token from the Discord Developer Portal. \
+                 Found under Bot > Token in your application settings."
+            }
             Self::DiscordAdminUserIds => {
                 "Comma-separated Discord user IDs that have full agent access. \
                  If left empty, Discord's Administrator permission is used. \
                  If any IDs are set, ONLY those users have admin access (Discord admin role is ignored). \
                  Get your ID: enable Developer Mode in Discord settings, then right-click your username."
+            }
+            Self::TelegramBotToken => {
+                "Your Telegram bot token from @BotFather. \
+                 Create a bot with /newbot and copy the token provided."
+            }
+            Self::SlackBotToken => {
+                "Your Slack bot OAuth token (starts with xoxb-). \
+                 Found under OAuth & Permissions in your Slack app settings."
+            }
+            Self::SlackAppToken => {
+                "Your Slack app-level token for Socket Mode (starts with xapp-). \
+                 Found under Basic Information > App-Level Tokens in your Slack app settings."
             }
             Self::TwitterBotHandle => {
                 "Your bot's Twitter handle without the @ symbol (e.g., 'starkbotai'). \
@@ -85,6 +122,19 @@ impl ChannelSettingKey {
                 "How often to check for new mentions in seconds. Minimum is 60 seconds. \
                  Higher values reduce API usage but increase response latency."
             }
+            Self::TwitterPro => {
+                "Enable if this account has X Premium (formerly Twitter Blue). \
+                 Allows posting tweets up to 25,000 characters instead of the 280 character limit. \
+                 When disabled, long responses are split into threaded tweets."
+            }
+            Self::TwitterReplyChance => {
+                "Percentage chance of replying to each mention. Use lower values to avoid \
+                 appearing spammy. For example, 10% means roughly 1 in 10 mentions gets a reply."
+            }
+            Self::TwitterMaxMentionsPerHour => {
+                "Maximum number of mentions to reply to per hour. Once the limit is reached, \
+                 remaining mentions are skipped until the next hour. Set to 0 for unlimited."
+            }
         }
     }
 
@@ -92,10 +142,17 @@ impl ChannelSettingKey {
     pub fn input_type(&self) -> SettingInputType {
         match self {
             Self::AutoStartOnBoot => SettingInputType::Toggle,
+            Self::DiscordBotToken => SettingInputType::Text,
             Self::DiscordAdminUserIds => SettingInputType::Text,
+            Self::TelegramBotToken => SettingInputType::Text,
+            Self::SlackBotToken => SettingInputType::Text,
+            Self::SlackAppToken => SettingInputType::Text,
             Self::TwitterBotHandle => SettingInputType::Text,
             Self::TwitterBotUserId => SettingInputType::Text,
             Self::TwitterPollIntervalSecs => SettingInputType::Number,
+            Self::TwitterPro => SettingInputType::Toggle,
+            Self::TwitterReplyChance => SettingInputType::Select,
+            Self::TwitterMaxMentionsPerHour => SettingInputType::Number,
         }
     }
 
@@ -103,26 +160,50 @@ impl ChannelSettingKey {
     pub fn placeholder(&self) -> &'static str {
         match self {
             Self::AutoStartOnBoot => "",
+            Self::DiscordBotToken => "MTIz...abc",
             Self::DiscordAdminUserIds => "123456789012345678, 987654321098765432",
+            Self::TelegramBotToken => "123456:ABC-DEF...",
+            Self::SlackBotToken => "xoxb-...",
+            Self::SlackAppToken => "xapp-...",
             Self::TwitterBotHandle => "starkbotai",
             Self::TwitterBotUserId => "1234567890123456789",
             Self::TwitterPollIntervalSecs => "120",
+            Self::TwitterPro => "",
+            Self::TwitterReplyChance => "",
+            Self::TwitterMaxMentionsPerHour => "0",
         }
     }
 
     /// Get the available options for select inputs
     pub fn options(&self) -> Option<Vec<(&'static str, &'static str)>> {
-        None
+        match self {
+            Self::TwitterReplyChance => Some(vec![
+                ("100", "100% (reply to all)"),
+                ("50", "50%"),
+                ("25", "25%"),
+                ("10", "10%"),
+                ("5", "5%"),
+                ("1", "1%"),
+            ]),
+            _ => None,
+        }
     }
 
     /// Get the default value for this setting
     pub fn default_value(&self) -> &'static str {
         match self {
             Self::AutoStartOnBoot => "false",
+            Self::DiscordBotToken => "",
             Self::DiscordAdminUserIds => "",
+            Self::TelegramBotToken => "",
+            Self::SlackBotToken => "",
+            Self::SlackAppToken => "",
             Self::TwitterBotHandle => "",
             Self::TwitterBotUserId => "",
             Self::TwitterPollIntervalSecs => "120",
+            Self::TwitterPro => "false",
+            Self::TwitterReplyChance => "100",
+            Self::TwitterMaxMentionsPerHour => "0",
         }
     }
 
@@ -238,18 +319,23 @@ pub fn get_settings_for_channel_type(channel_type: ChannelType) -> Vec<ChannelSe
 
     let type_specific: Vec<ChannelSettingDefinition> = match channel_type {
         ChannelType::Discord => vec![
+            ChannelSettingKey::DiscordBotToken.into(),
             ChannelSettingKey::DiscordAdminUserIds.into(),
         ],
         ChannelType::Telegram => vec![
-            // No custom settings yet
+            ChannelSettingKey::TelegramBotToken.into(),
         ],
         ChannelType::Slack => vec![
-            // No custom settings yet
+            ChannelSettingKey::SlackBotToken.into(),
+            ChannelSettingKey::SlackAppToken.into(),
         ],
         ChannelType::Twitter => vec![
             ChannelSettingKey::TwitterBotHandle.into(),
             ChannelSettingKey::TwitterBotUserId.into(),
             ChannelSettingKey::TwitterPollIntervalSecs.into(),
+            ChannelSettingKey::TwitterPro.into(),
+            ChannelSettingKey::TwitterReplyChance.into(),
+            ChannelSettingKey::TwitterMaxMentionsPerHour.into(),
         ],
     };
 
@@ -270,18 +356,30 @@ mod tests {
     #[test]
     fn test_discord_settings() {
         let settings = get_settings_for_channel_type(ChannelType::Discord);
-        // 1 common setting (auto_start_on_boot) + 1 Discord-specific setting
-        assert_eq!(settings.len(), 2);
-        assert_eq!(settings[0].key, "auto_start_on_boot"); // Common setting first
-        assert_eq!(settings[1].key, "discord_admin_user_ids");
+        // 1 common + 2 Discord-specific (bot_token, admin_user_ids)
+        assert_eq!(settings.len(), 3);
+        assert_eq!(settings[0].key, "auto_start_on_boot");
+        assert_eq!(settings[1].key, "discord_bot_token");
+        assert_eq!(settings[2].key, "discord_admin_user_ids");
     }
 
     #[test]
     fn test_telegram_settings() {
         let settings = get_settings_for_channel_type(ChannelType::Telegram);
-        // Only common setting (auto_start_on_boot)
-        assert_eq!(settings.len(), 1);
+        // 1 common + 1 Telegram-specific (bot_token)
+        assert_eq!(settings.len(), 2);
         assert_eq!(settings[0].key, "auto_start_on_boot");
+        assert_eq!(settings[1].key, "telegram_bot_token");
+    }
+
+    #[test]
+    fn test_slack_settings() {
+        let settings = get_settings_for_channel_type(ChannelType::Slack);
+        // 1 common + 2 Slack-specific (bot_token, app_token)
+        assert_eq!(settings.len(), 3);
+        assert_eq!(settings[0].key, "auto_start_on_boot");
+        assert_eq!(settings[1].key, "slack_bot_token");
+        assert_eq!(settings[2].key, "slack_app_token");
     }
 
     #[test]

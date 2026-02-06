@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { MessageSquare, Hash, Plus, Play, Square, Trash2, Save, Pencil } from 'lucide-react';
+import { MessageSquare, Hash, Plus, Play, Square, Trash2, Save, Pencil, Twitter } from 'lucide-react';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -22,6 +22,7 @@ const CHANNEL_TYPES = [
   { value: 'telegram', label: 'Telegram', icon: MessageSquare, color: 'blue' },
   { value: 'slack', label: 'Slack', icon: Hash, color: 'purple' },
   { value: 'discord', label: 'Discord', icon: MessageSquare, color: 'indigo' },
+  { value: 'twitter', label: 'Twitter / X', icon: Twitter, color: 'sky' },
 ];
 
 function getChannelHints(channelType: string): string[] {
@@ -31,6 +32,12 @@ function getChannelHints(channelType: string): string[] {
         'In the Discord Developer Portal, enable Presence Intent, Server Members Intent, and Message Content Intent under Bot settings.',
         'Warning: Only install Starkbot in your own Discord server. The admin will have full control over the Agentic Loop and Tools.',
       ];
+    case 'twitter':
+      return [
+        'Requires the X API v2 pay-per-usage plan. Buy credits and check your balance at <a href="https://console.x.com" target="_blank">console.x.com</a>.',
+        'Set your 4 OAuth 1.0a keys (Consumer Key, Consumer Secret, Access Token, Access Token Secret) on the API Keys page.',
+        'Configure the Bot Handle (e.g. "starkbot") and Bot User ID (numeric) in channel settings after creation.',
+      ];
     default:
       return [];
   }
@@ -39,16 +46,12 @@ function getChannelHints(channelType: string): string[] {
 interface ChannelFormData {
   channel_type: string;
   name: string;
-  bot_token: string;
-  app_token: string;
   settings: Record<string, string>;
 }
 
 const emptyForm: ChannelFormData = {
   channel_type: 'telegram',
   name: '',
-  bot_token: '',
-  app_token: '',
   settings: {},
 };
 
@@ -82,13 +85,8 @@ export default function Channels() {
   }, []);
 
   const handleCreate = async () => {
-    if (!newChannel.name.trim() || !newChannel.bot_token.trim()) {
-      setError('Name and bot token are required');
-      return;
-    }
-
-    if (newChannel.channel_type === 'slack' && !newChannel.app_token.trim()) {
-      setError('Slack requires an app token');
+    if (!newChannel.name.trim()) {
+      setError('Name is required');
       return;
     }
 
@@ -97,8 +95,6 @@ export default function Channels() {
       const createdChannel = await createChannel({
         channel_type: newChannel.channel_type,
         name: newChannel.name,
-        bot_token: newChannel.bot_token,
-        app_token: newChannel.channel_type === 'slack' ? newChannel.app_token : undefined,
       });
 
       // Save settings if any were configured
@@ -137,8 +133,6 @@ export default function Channels() {
       // Update channel data
       await updateChannel(id, {
         name: editForm.name || undefined,
-        bot_token: editForm.bot_token || undefined,
-        app_token: editForm.app_token || undefined,
       });
 
       // Update settings
@@ -227,8 +221,6 @@ export default function Channels() {
       setEditForm({
         channel_type: channel.channel_type,
         name: channel.name,
-        bot_token: channel.bot_token,
-        app_token: channel.app_token || '',
         settings: settingsMap,
       });
     } catch (e) {
@@ -304,20 +296,6 @@ export default function Channels() {
                 onChange={(e) => setNewChannel({ ...newChannel, name: e.target.value })}
                 placeholder="My Telegram Bot"
               />
-              <Input
-                label="Bot Token"
-                value={newChannel.bot_token}
-                onChange={(e) => setNewChannel({ ...newChannel, bot_token: e.target.value })}
-                placeholder={newChannel.channel_type === 'telegram' ? '123456:ABC-DEF...' : 'xoxb-...'}
-              />
-              {newChannel.channel_type === 'slack' && (
-                <Input
-                  label="App Token (for Socket Mode)"
-                  value={newChannel.app_token}
-                  onChange={(e) => setNewChannel({ ...newChannel, app_token: e.target.value })}
-                  placeholder="xapp-..."
-                />
-              )}
               {/* Settings section for new channel */}
               {newChannelSchema.length > 0 && (
                 <>
@@ -326,21 +304,78 @@ export default function Channels() {
                   </div>
                   {newChannelSchema.map((setting) => (
                     <div key={setting.key}>
-                      <Input
-                        label={setting.label}
-                        value={newChannel.settings[setting.key] || ''}
-                        onChange={(e) =>
-                          setNewChannel({
-                            ...newChannel,
-                            settings: {
-                              ...newChannel.settings,
-                              [setting.key]: e.target.value,
-                            },
-                          })
-                        }
-                        placeholder={setting.placeholder}
-                      />
-                      <p className="mt-1 text-xs text-slate-500">{setting.description}</p>
+                      {setting.input_type === 'toggle' ? (
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <label className="block text-sm font-medium text-slate-300">
+                              {setting.label}
+                            </label>
+                            <p className="mt-1 text-xs text-slate-500">{setting.description}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setNewChannel({
+                                ...newChannel,
+                                settings: {
+                                  ...newChannel.settings,
+                                  [setting.key]: newChannel.settings[setting.key] === 'true' ? 'false' : 'true',
+                                },
+                              })
+                            }
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                              newChannel.settings[setting.key] === 'true' ? 'bg-stark-500' : 'bg-slate-600'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                                newChannel.settings[setting.key] === 'true' ? 'translate-x-6' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      ) : setting.input_type === 'select' && setting.options ? (
+                        <>
+                          <label className="block text-sm font-medium text-slate-300 mb-1">{setting.label}</label>
+                          <select
+                            value={newChannel.settings[setting.key] || setting.default_value || ''}
+                            onChange={(e) =>
+                              setNewChannel({
+                                ...newChannel,
+                                settings: {
+                                  ...newChannel.settings,
+                                  [setting.key]: e.target.value,
+                                },
+                              })
+                            }
+                            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-stark-500 focus:border-transparent"
+                          >
+                            {setting.options.map((opt) => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                          <p className="mt-1 text-xs text-slate-500">{setting.description}</p>
+                        </>
+                      ) : (
+                        <>
+                          <Input
+                            label={setting.label}
+                            value={newChannel.settings[setting.key] || ''}
+                            onChange={(e) =>
+                              setNewChannel({
+                                ...newChannel,
+                                settings: {
+                                  ...newChannel.settings,
+                                  [setting.key]: e.target.value,
+                                },
+                              })
+                            }
+                            placeholder={setting.placeholder}
+                            type={setting.input_type === 'number' ? 'number' : 'text'}
+                          />
+                          <p className="mt-1 text-xs text-slate-500">{setting.description}</p>
+                        </>
+                      )}
                     </div>
                   ))}
                 </>
@@ -442,18 +477,6 @@ export default function Channels() {
                             value={editForm.name}
                             onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
                           />
-                          <Input
-                            label="Bot Token"
-                            value={editForm.bot_token}
-                            onChange={(e) => setEditForm({ ...editForm, bot_token: e.target.value })}
-                          />
-                          {channel.channel_type === 'slack' && (
-                            <Input
-                              label="App Token"
-                              value={editForm.app_token}
-                              onChange={(e) => setEditForm({ ...editForm, app_token: e.target.value })}
-                            />
-                          )}
                           {/* Settings section */}
                           {editSchema.length > 0 && (
                             <>
@@ -492,6 +515,28 @@ export default function Channels() {
                                         />
                                       </button>
                                     </div>
+                                  ) : setting.input_type === 'select' && setting.options ? (
+                                    <>
+                                      <label className="block text-sm font-medium text-slate-300 mb-1">{setting.label}</label>
+                                      <select
+                                        value={editForm.settings[setting.key] || setting.default_value || ''}
+                                        onChange={(e) =>
+                                          setEditForm({
+                                            ...editForm,
+                                            settings: {
+                                              ...editForm.settings,
+                                              [setting.key]: e.target.value,
+                                            },
+                                          })
+                                        }
+                                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-stark-500 focus:border-transparent"
+                                      >
+                                        {setting.options.map((opt) => (
+                                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                      </select>
+                                      <p className="mt-1 text-xs text-slate-500">{setting.description}</p>
+                                    </>
                                   ) : (
                                     <>
                                       <Input
@@ -537,25 +582,11 @@ export default function Channels() {
                   ) : (
                     // View mode - display channel info
                     <div className="space-y-3">
-                      <div>
-                        <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1">Bot Token</label>
-                        <code className="block px-2 sm:px-3 py-2 bg-slate-800 rounded text-xs sm:text-sm text-slate-300 font-mono break-all overflow-hidden">
-                          {channel.bot_token}
-                        </code>
-                      </div>
                       {getChannelHints(channel.channel_type).map((hint, idx) => (
                         <div key={idx} className="px-3 py-2 bg-slate-700/50 border border-slate-600/50 rounded-lg">
-                          <p className="text-xs text-slate-300">{hint}</p>
+                          <p className="text-xs text-slate-300 [&_a]:text-blue-400 [&_a]:underline [&_a]:hover:text-blue-300" dangerouslySetInnerHTML={{ __html: hint }} />
                         </div>
                       ))}
-                      {channel.app_token && (
-                        <div>
-                          <label className="block text-xs sm:text-sm font-medium text-slate-400 mb-1">App Token</label>
-                          <code className="block px-2 sm:px-3 py-2 bg-slate-800 rounded text-xs sm:text-sm text-slate-300 font-mono break-all overflow-hidden">
-                            {channel.app_token}
-                          </code>
-                        </div>
-                      )}
                       <div className="flex justify-end pt-2">
                         <Button
                           variant="secondary"

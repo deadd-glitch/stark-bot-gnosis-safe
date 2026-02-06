@@ -670,12 +670,19 @@ export interface ChannelSetting {
   setting_value: string;
 }
 
+export interface SelectOption {
+  value: string;
+  label: string;
+}
+
 export interface ChannelSettingDefinition {
   key: string;
   label: string;
   description: string;
-  input_type: 'text' | 'text_area' | 'toggle' | 'number';
+  input_type: 'text' | 'text_area' | 'toggle' | 'number' | 'select';
   placeholder: string;
+  options?: SelectOption[];
+  default_value?: string;
 }
 
 export interface ChannelSettingsResponse {
@@ -714,7 +721,7 @@ export async function getChannel(id: number): Promise<ChannelInfo | null> {
 export async function createChannel(data: {
   channel_type: string;
   name: string;
-  bot_token: string;
+  bot_token?: string;
   app_token?: string;
 }): Promise<ChannelInfo> {
   const response = await apiFetch<ChannelOperationResponse>('/channels', {

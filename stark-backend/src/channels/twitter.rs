@@ -10,12 +10,13 @@ use crate::db::Database;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::{Channel, ChannelSettingKey};
-use crate::tools::builtin::social_media::{generate_oauth_header, TwitterCredentials};
+use crate::tools::builtin::social_media::{generate_oauth_header, percent_encode, TwitterCredentials};
 use once_cell::sync::Lazy;
+use rand::Rng;
 use regex::Regex;
 use serde::Deserialize;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use tokio::time::interval;
 
@@ -32,8 +33,11 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 120;
 /// Twitter API v2 base URL
 const TWITTER_API_BASE: &str = "https://api.twitter.com/2";
 
-/// Maximum characters per tweet
+/// Maximum characters per tweet (standard)
 const TWITTER_MAX_CHARS: usize = 280;
+
+/// Maximum characters per tweet (X Premium / Pro)
+const TWITTER_PRO_MAX_CHARS: usize = 25_000;
 
 /// Configuration for the Twitter listener
 #[derive(Debug, Clone)]
@@ -41,7 +45,17 @@ pub struct TwitterConfig {
     pub bot_handle: String,
     pub bot_user_id: String,
     pub poll_interval_secs: u64,
+    pub is_pro: bool,
+    pub reply_chance: u8,
+    pub max_mentions_per_hour: u32,
     pub credentials: TwitterCredentials,
+}
+
+impl TwitterConfig {
+    /// Get the max characters per tweet based on Pro status
+    pub fn max_chars(&self) -> usize {
+        if self.is_pro { TWITTER_PRO_MAX_CHARS } else { TWITTER_MAX_CHARS }
+    }
 }
 
 impl TwitterConfig {
@@ -68,6 +82,28 @@ impl TwitterConfig {
             .unwrap_or(DEFAULT_POLL_INTERVAL_SECS)
             .max(MIN_POLL_INTERVAL_SECS);
 
+        let is_pro = db
+            .get_channel_setting(channel_id, ChannelSettingKey::TwitterPro.as_ref())
+            .ok()
+            .flatten()
+            .map(|s| s == "true")
+            .unwrap_or(false);
+
+        let reply_chance: u8 = db
+            .get_channel_setting(channel_id, ChannelSettingKey::TwitterReplyChance.as_ref())
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100)
+            .min(100);
+
+        let max_mentions_per_hour: u32 = db
+            .get_channel_setting(channel_id, ChannelSettingKey::TwitterMaxMentionsPerHour.as_ref())
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
         // Load OAuth credentials from API keys
         let consumer_key = get_api_key(db, ApiKeyId::TwitterConsumerKey)
             .ok_or_else(|| "TWITTER_CONSUMER_KEY not configured".to_string())?;
@@ -82,6 +118,9 @@ impl TwitterConfig {
             bot_handle,
             bot_user_id,
             poll_interval_secs,
+            is_pro,
+            reply_chance,
+            max_mentions_per_hour,
             credentials: TwitterCredentials::new(
                 consumer_key,
                 consumer_secret,
@@ -205,10 +244,10 @@ struct PollResult {
     rate_limit: RateLimitInfo,
 }
 
-/// Twitter API v2 users response (for looking up usernames)
+/// Twitter API v2 users response (for looking up usernames - single user)
 #[derive(Debug, Deserialize)]
-struct UsersResponse {
-    data: Option<Vec<TwitterUser>>,
+struct SingleUserResponse {
+    data: Option<TwitterUser>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -262,10 +301,13 @@ pub async fn start_twitter_listener(
     // Load configuration
     let config = TwitterConfig::from_channel(&channel, &db)?;
     log::info!(
-        "Twitter: Bot handle=@{}, user_id={}, poll_interval={}s",
+        "Twitter: Bot handle=@{}, user_id={}, poll_interval={}s, pro={}, reply_chance={}%, max_mentions/hr={}",
         config.bot_handle,
         config.bot_user_id,
-        config.poll_interval_secs
+        config.poll_interval_secs,
+        config.is_pro,
+        config.reply_chance,
+        if config.max_mentions_per_hour == 0 { "unlimited".to_string() } else { config.max_mentions_per_hour.to_string() }
     );
 
     // Validate credentials by fetching user info
@@ -298,6 +340,10 @@ pub async fn start_twitter_listener(
         "Twitter: Starting poll loop, since_id={:?}",
         since_id
     );
+
+    // Hourly rate limiter state
+    let mut hour_start = Instant::now();
+    let mut replies_this_hour: u32 = 0;
 
     // Create poll interval
     let mut poll_interval = interval(Duration::from_secs(config.poll_interval_secs));
@@ -363,6 +409,47 @@ pub async fn start_twitter_listener(
                                     continue;
                                 }
 
+                                // Reset hourly counter if an hour has elapsed
+                                if hour_start.elapsed() >= Duration::from_secs(3600) {
+                                    hour_start = Instant::now();
+                                    replies_this_hour = 0;
+                                }
+
+                                // Check hourly rate limit (0 = unlimited)
+                                if config.max_mentions_per_hour > 0 && replies_this_hour >= config.max_mentions_per_hour {
+                                    log::info!(
+                                        "Twitter: Hourly rate limit reached ({}/{}), skipping mention {}",
+                                        replies_this_hour, config.max_mentions_per_hour, mention.id
+                                    );
+                                    let _ = db.mark_tweet_processed(
+                                        &mention.id,
+                                        channel_id,
+                                        &mention.author_id,
+                                        "unknown",
+                                        &mention.text,
+                                    );
+                                    continue;
+                                }
+
+                                // Reply chance roll (100 = always reply)
+                                if config.reply_chance < 100 {
+                                    let roll: u8 = rand::thread_rng().gen_range(1..=100);
+                                    if roll > config.reply_chance {
+                                        log::info!(
+                                            "Twitter: Skipping mention {} (rolled {}, need <= {}%)",
+                                            mention.id, roll, config.reply_chance
+                                        );
+                                        let _ = db.mark_tweet_processed(
+                                            &mention.id,
+                                            channel_id,
+                                            &mention.author_id,
+                                            "unknown",
+                                            &mention.text,
+                                        );
+                                        continue;
+                                    }
+                                }
+
                                 // Look up author username
                                 let author_username = match lookup_user(&client, &config, &mention.author_id).await {
                                     Ok(user) => user.username,
@@ -405,13 +492,18 @@ pub async fn start_twitter_listener(
 
                                 // Post reply if we have a response
                                 if let Some(response_text) = response {
-                                    if let Err(e) = post_reply(
+                                    match post_reply(
                                         &client,
                                         &config,
                                         &mention.id,
                                         &response_text,
                                     ).await {
-                                        log::error!("Twitter: Failed to post reply: {}", e);
+                                        Ok(_) => {
+                                            replies_this_hour += 1;
+                                        }
+                                        Err(e) => {
+                                            log::error!("Twitter: Failed to post reply: {}", e);
+                                        }
                                     }
                                 }
 
@@ -466,11 +558,10 @@ async fn verify_credentials(
         return Err(format!("API error ({}): {}", status, body));
     }
 
-    let data: UsersResponse =
+    let data: SingleUserResponse =
         serde_json::from_str(&body).map_err(|e| format!("Failed to parse response: {}", e))?;
 
     data.data
-        .and_then(|users| users.into_iter().next())
         .map(|user| user.username)
         .ok_or_else(|| "No user data returned".to_string())
 }
@@ -481,13 +572,16 @@ async fn poll_mentions(
     config: &TwitterConfig,
     since_id: Option<&str>,
 ) -> Result<PollResult, String> {
-    let url = format!(
-        "{}/users/{}/mentions",
-        TWITTER_API_BASE, config.bot_user_id
-    );
+    // Use /tweets/search/recent instead of /users/{id}/mentions
+    // This endpoint is available on the pay-per-usage plan (no Basic tier needed)
+    let url = format!("{}/tweets/search/recent", TWITTER_API_BASE);
+
+    // Search for @mentions of our bot handle
+    let query = format!("@{}", config.bot_handle);
 
     // Build query parameters
     let mut params: Vec<(&str, &str)> = vec![
+        ("query", &query),
         ("tweet.fields", "author_id,conversation_id,in_reply_to_user_id,referenced_tweets"),
         ("max_results", "10"),
     ];
@@ -501,7 +595,7 @@ async fn poll_mentions(
     // Build full URL with query string
     let query_string: String = params
         .iter()
-        .map(|(k, v)| format!("{}={}", k, v))
+        .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
         .collect::<Vec<_>>()
         .join("&");
     let full_url = format!("{}?{}", url, query_string);
@@ -525,6 +619,8 @@ async fn poll_mentions(
     let rate_limit = RateLimitInfo::from_response(&response);
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
+
+    log::debug!("Twitter search/recent response ({}): {}", status, body);
 
     if !status.is_success() {
         return Err(format!("API error ({}): {}", status, body));
@@ -583,11 +679,10 @@ async fn lookup_user(
         return Err(format!("API error ({}): {}", status, body));
     }
 
-    let data: UsersResponse =
+    let data: SingleUserResponse =
         serde_json::from_str(&body).map_err(|e| format!("Failed to parse response: {}", e))?;
 
     data.data
-        .and_then(|users| users.into_iter().next())
         .ok_or_else(|| "User not found".to_string())
 }
 
@@ -627,9 +722,14 @@ async fn process_mention(
     }
 
     // Add source hint to help the agent understand the context
+    let char_hint = if config.is_pro {
+        "This is an X Premium account - you can write longer responses (up to 25,000 chars)"
+    } else {
+        "Keep response under 280 chars or it will be threaded"
+    };
     let text_with_hint = format!(
-        "[TWITTER MENTION from @{} - Keep response under 280 chars or it will be threaded]\n\n{}",
-        author_username, command_text
+        "[TWITTER MENTION from @{} - {}]\n\n{}",
+        author_username, char_hint, command_text
     );
 
     // Create normalized message for dispatcher
@@ -646,15 +746,42 @@ async fn process_mention(
         force_safe_mode: false,
     };
 
-    // Subscribe to events (for logging, not forwarding)
-    let (client_id, _event_rx) = broadcaster.subscribe();
+    // Subscribe to events to capture say_to_user messages.
+    // Unlike Discord/Telegram which forward events in real-time via WebSocket,
+    // Twitter is polling-based and needs to capture the message for post_reply().
+    let (client_id, mut event_rx) = broadcaster.subscribe();
+
+    // Collect say_to_user messages from broadcast events in a background task
+    let say_to_user_messages: Arc<tokio::sync::Mutex<Vec<String>>> =
+        Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let messages_clone = say_to_user_messages.clone();
+    let event_channel_id = channel_id;
+    let event_task = tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            // Only capture events for this channel
+            let ev_channel = event.data.get("channel_id").and_then(|v| v.as_i64());
+            if ev_channel != Some(event_channel_id) {
+                continue;
+            }
+            // Capture say_to_user tool results
+            if event.event == "tool.result" {
+                let tool_name = event.data.get("tool_name").and_then(|v| v.as_str());
+                let success = event.data.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                let content = event.data.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                if tool_name == Some("say_to_user") && success && !content.is_empty() {
+                    messages_clone.lock().await.push(content.to_string());
+                }
+            }
+        }
+    });
 
     // Dispatch to AI
     log::info!("Twitter: Dispatching message to AI for @{}", author_username);
     let result = dispatcher.dispatch(normalized).await;
 
-    // Unsubscribe from events
+    // Unsubscribe from events and stop event task
     broadcaster.unsubscribe(&client_id);
+    event_task.abort();
 
     log::info!(
         "Twitter: Dispatch complete for @{}, error={:?}",
@@ -662,18 +789,29 @@ async fn process_mention(
         result.error
     );
 
+    // First check the dispatch result (non-say_to_user responses like simple text)
     if result.error.is_none() && !result.response.is_empty() {
         Some(result.response)
     } else if let Some(error) = result.error {
         Some(format!("Sorry, I encountered an error: {}", error))
     } else {
-        None
+        // Dispatch returned empty response — check if say_to_user delivered via events
+        let captured = say_to_user_messages.lock().await;
+        if !captured.is_empty() {
+            // Combine all say_to_user messages (usually just one)
+            let combined = captured.join("\n\n");
+            log::info!("Twitter: Using say_to_user message from events ({} chars)", combined.len());
+            Some(combined)
+        } else {
+            log::warn!("Twitter: No response from dispatch and no say_to_user events for @{}", author_username);
+            None
+        }
     }
 }
 
 /// Split a response into tweet-sized chunks for threading
-fn split_for_twitter(text: &str) -> Vec<String> {
-    if text.chars().count() <= TWITTER_MAX_CHARS {
+fn split_for_twitter(text: &str, max_chars: usize) -> Vec<String> {
+    if text.chars().count() <= max_chars {
         return vec![text.to_string()];
     }
 
@@ -690,7 +828,7 @@ fn split_for_twitter(text: &str) -> Vec<String> {
             };
 
             // Reserve space for thread indicator (e.g., " 1/3")
-            let max_chunk_chars = TWITTER_MAX_CHARS - 5;
+            let max_chunk_chars = max_chars - 5;
 
             if potential.chars().count() > max_chunk_chars {
                 if !current_chunk.is_empty() {
@@ -708,7 +846,7 @@ fn split_for_twitter(text: &str) -> Vec<String> {
         }
 
         // Add newline between lines if we have content
-        if !current_chunk.is_empty() && current_chunk.chars().count() < TWITTER_MAX_CHARS - 5 {
+        if !current_chunk.is_empty() && current_chunk.chars().count() < max_chars - 5 {
             current_chunk.push('\n');
         }
     }
@@ -738,7 +876,7 @@ async fn post_reply(
     reply_to_id: &str,
     text: &str,
 ) -> Result<String, String> {
-    let chunks = split_for_twitter(text);
+    let chunks = split_for_twitter(text, config.max_chars());
     let mut last_tweet_id = reply_to_id.to_string();
 
     for (i, chunk) in chunks.iter().enumerate() {
@@ -868,15 +1006,19 @@ mod tests {
     fn test_split_for_twitter() {
         // Short message - no split
         let short = "Hello world!";
-        assert_eq!(split_for_twitter(short), vec!["Hello world!"]);
+        assert_eq!(split_for_twitter(short, TWITTER_MAX_CHARS), vec!["Hello world!"]);
 
-        // Long message - should split
+        // Long message - should split at 280
         let long = "a ".repeat(200);
-        let chunks = split_for_twitter(&long);
+        let chunks = split_for_twitter(&long, TWITTER_MAX_CHARS);
         assert!(chunks.len() > 1);
         for chunk in &chunks {
             assert!(chunk.chars().count() <= TWITTER_MAX_CHARS);
         }
+
+        // Pro mode - same long message should NOT split at 25k limit
+        let chunks_pro = split_for_twitter(&long, TWITTER_PRO_MAX_CHARS);
+        assert_eq!(chunks_pro.len(), 1);
     }
 
     #[test]

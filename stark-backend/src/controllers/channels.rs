@@ -187,15 +187,6 @@ async fn create_channel(
         });
     }
 
-    // Validate bot token is not empty
-    if body.bot_token.trim().is_empty() {
-        return HttpResponse::BadRequest().json(ChannelOperationResponse {
-            success: false,
-            channel: None,
-            error: Some("Bot token cannot be empty".to_string()),
-        });
-    }
-
     // Validate name is not empty
     if body.name.trim().is_empty() {
         return HttpResponse::BadRequest().json(ChannelOperationResponse {
@@ -205,20 +196,12 @@ async fn create_channel(
         });
     }
 
-    // Slack requires app_token
-    if body.channel_type == "slack" && body.app_token.as_ref().map_or(true, |t| t.trim().is_empty())
-    {
-        return HttpResponse::BadRequest().json(ChannelOperationResponse {
-            success: false,
-            channel: None,
-            error: Some("Slack channels require an app_token for Socket Mode".to_string()),
-        });
-    }
+    let bot_token = body.bot_token.as_deref().unwrap_or("");
 
     match state.db.create_channel(
         &body.channel_type,
         &body.name,
-        &body.bot_token,
+        bot_token,
         body.app_token.as_deref(),
     ) {
         Ok(channel) => HttpResponse::Created().json(ChannelOperationResponse {
@@ -270,17 +253,6 @@ async fn create_safe_mode_channel(
         });
     }
 
-    // Validate bot token is not empty
-    if body.bot_token.trim().is_empty() {
-        return HttpResponse::BadRequest().json(SafeModeChannelResponse {
-            success: false,
-            channel: None,
-            error: Some("Bot token cannot be empty".to_string()),
-            queue_length: state.safe_mode_rate_limiter.queue_len(),
-            next_slot_ms: state.safe_mode_rate_limiter.time_until_available_ms(),
-        });
-    }
-
     // Validate name is not empty
     if body.name.trim().is_empty() {
         return HttpResponse::BadRequest().json(SafeModeChannelResponse {
@@ -314,6 +286,8 @@ async fn create_safe_mode_channel(
         });
     }
 
+    let bot_token = body.bot_token.as_deref().unwrap_or("");
+
     log::info!(
         "[SAFE_MODE_CHANNEL] Creating safe mode channel '{}' (type: {}) for user {} on {}, queue_len: {}",
         body.name,
@@ -327,7 +301,7 @@ async fn create_safe_mode_channel(
     match state.safe_mode_rate_limiter.create_safe_mode_channel(
         &body.channel_type,
         &body.name,
-        &body.bot_token,
+        bot_token,
         body.app_token.as_deref(),
         &body.user_id,
         &body.platform,
@@ -409,17 +383,6 @@ async fn update_channel(
                 success: false,
                 channel: None,
                 error: Some("Channel name cannot be empty".to_string()),
-            });
-        }
-    }
-
-    // Validate bot_token if provided
-    if let Some(ref token) = body.bot_token {
-        if token.trim().is_empty() {
-            return HttpResponse::BadRequest().json(ChannelOperationResponse {
-                success: false,
-                channel: None,
-                error: Some("Bot token cannot be empty".to_string()),
             });
         }
     }

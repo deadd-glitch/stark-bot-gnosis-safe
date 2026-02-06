@@ -107,7 +107,8 @@ impl ChannelResponse {
 pub struct CreateChannelRequest {
     pub channel_type: String,
     pub name: String,
-    pub bot_token: String,
+    #[serde(default)]
+    pub bot_token: Option<String>,
     pub app_token: Option<String>,
 }
 
@@ -116,7 +117,8 @@ pub struct CreateChannelRequest {
 pub struct CreateSafeModeChannelRequest {
     pub channel_type: String,
     pub name: String,
-    pub bot_token: String,
+    #[serde(default)]
+    pub bot_token: Option<String>,
     pub app_token: Option<String>,
     /// Platform-specific user ID (Discord snowflake, Telegram ID, etc.)
     pub user_id: String,
