@@ -3640,6 +3640,7 @@ impl MessageDispatcher {
 }
 
 #[cfg(test)]
+#[path = "dispatcher_tests.rs"]
 mod dispatcher_tests;
 
 #[cfg(test)]

@@ -48,6 +48,9 @@ pub struct BackupData {
     /// Soul document content (SOUL.md - agent's personality and truths)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soul_document: Option<String>,
+    /// Discord user registrations (discord_user_id → public_address mappings)
+    #[serde(default)]
+    pub discord_registrations: Vec<DiscordRegistrationEntry>,
 }
 
 impl BackupData {
@@ -67,6 +70,7 @@ impl BackupData {
             channel_settings: Vec::new(),
             channels: Vec::new(),
             soul_document: None,
+            discord_registrations: Vec::new(),
         }
     }
 
@@ -82,6 +86,7 @@ impl BackupData {
             + self.channel_settings.len()
             + self.channels.len()
             + if self.soul_document.is_some() { 1 } else { 0 }
+            + self.discord_registrations.len()
     }
 }
 
@@ -186,6 +191,15 @@ pub struct ChannelEntry {
     pub enabled: bool,
     pub bot_token: String,
     pub app_token: Option<String>,
+}
+
+/// Discord user registration entry in backup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscordRegistrationEntry {
+    pub discord_user_id: String,
+    pub discord_username: Option<String>,
+    pub public_address: String,
+    pub registered_at: Option<String>,
 }
 
 /// Options for what to include in a backup

@@ -5,7 +5,7 @@ use strum::{AsRefStr, EnumIter, EnumString, IntoEnumIterator};
 
 use crate::backup::{
     ApiKeyEntry, BackupData, BotSettingsEntry, ChannelEntry, ChannelSettingEntry, CronJobEntry,
-    HeartbeatConfigEntry, MindConnectionEntry, MindNodeEntry,
+    DiscordRegistrationEntry, HeartbeatConfigEntry, MindConnectionEntry, MindNodeEntry,
 };
 use crate::db::tables::mind_nodes::{CreateMindNodeRequest, UpdateMindNodeRequest};
 use crate::keystore_client::KEYSTORE_CLIENT;
@@ -342,6 +342,8 @@ pub struct BackupResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_setting_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub discord_registration_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub has_settings: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_heartbeat: Option<bool>,
@@ -376,6 +378,8 @@ pub struct PreviewKeysResponse {
     pub channel_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_setting_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discord_registration_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_settings: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -617,6 +621,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -641,6 +646,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                     cron_job_count: None,
                     channel_count: None,
                     channel_setting_count: None,
+                    discord_registration_count: None,
                     has_settings: None,
                     has_heartbeat: None,
                     has_soul: None,
@@ -667,6 +673,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -847,8 +854,28 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
         }
     }
 
+    // Get discord registrations
+    match crate::discord_hooks::db::list_registered_profiles(&state.db) {
+        Ok(profiles) => {
+            backup.discord_registrations = profiles
+                .iter()
+                .filter_map(|p| {
+                    p.public_address.as_ref().map(|addr| DiscordRegistrationEntry {
+                        discord_user_id: p.discord_user_id.clone(),
+                        discord_username: p.discord_username.clone(),
+                        public_address: addr.clone(),
+                        registered_at: p.registered_at.clone(),
+                    })
+                })
+                .collect();
+        }
+        Err(e) => {
+            log::warn!("Failed to list discord registrations for backup: {}", e);
+        }
+    }
+
     // Check if there's anything to backup
-    if backup.api_keys.is_empty() && backup.mind_map_nodes.is_empty() && backup.cron_jobs.is_empty() && backup.bot_settings.is_none() && backup.heartbeat_config.is_none() && backup.channel_settings.is_empty() && backup.channels.is_empty() && backup.soul_document.is_none() {
+    if backup.api_keys.is_empty() && backup.mind_map_nodes.is_empty() && backup.cron_jobs.is_empty() && backup.bot_settings.is_none() && backup.heartbeat_config.is_none() && backup.channel_settings.is_empty() && backup.channels.is_empty() && backup.soul_document.is_none() && backup.discord_registrations.is_empty() {
         return HttpResponse::BadRequest().json(BackupResponse {
             success: false,
             key_count: None,
@@ -857,6 +884,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
             cron_job_count: None,
             channel_count: None,
             channel_setting_count: None,
+            discord_registration_count: None,
             has_settings: None,
             has_heartbeat: None,
             has_soul: None,
@@ -872,6 +900,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
     let cron_job_count = backup.cron_jobs.len();
     let channel_count = backup.channels.len();
     let channel_setting_count = backup.channel_settings.len();
+    let discord_registration_count = backup.discord_registrations.len();
     let has_settings = backup.bot_settings.is_some();
     let has_heartbeat = backup.heartbeat_config.is_some();
     let item_count = backup.item_count();
@@ -889,6 +918,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -911,6 +941,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -943,11 +974,12 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 cron_job_count: Some(cron_job_count),
                 channel_count: Some(channel_count),
                 channel_setting_count: Some(channel_setting_count),
+                discord_registration_count: Some(discord_registration_count),
                 has_settings: Some(has_settings),
                 has_heartbeat: Some(has_heartbeat),
                 has_soul: Some(has_soul),
                 message: Some(format!(
-                    "Backed up {} items ({} keys, {} nodes, {} connections, {} cron jobs, {} channels, {} channel settings{}{}{})",
+                    "Backed up {} items ({} keys, {} nodes, {} connections, {} cron jobs, {} channels, {} channel settings, {} discord registrations{}{}{})",
                     item_count,
                     key_count,
                     node_count,
@@ -955,6 +987,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                     cron_job_count,
                     channel_count,
                     channel_setting_count,
+                    discord_registration_count,
                     if has_settings { ", settings" } else { "" },
                     if has_heartbeat { ", heartbeat" } else { "" },
                     if has_soul { ", soul" } else { "" }
@@ -972,6 +1005,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -989,6 +1023,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1017,6 +1052,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1045,6 +1081,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1065,6 +1102,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1080,6 +1118,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             cron_job_count: None,
             channel_count: None,
             channel_setting_count: None,
+            discord_registration_count: None,
             has_settings: None,
             has_heartbeat: None,
             has_soul: None,
@@ -1099,6 +1138,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1121,6 +1161,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1147,6 +1188,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                         cron_job_count: None,
                         channel_count: None,
                         channel_setting_count: None,
+                        discord_registration_count: None,
                         has_settings: None,
                         has_heartbeat: None,
                         has_soul: None,
@@ -1432,6 +1474,36 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
         }
     }
 
+    // Restore discord registrations
+    let mut restored_discord_registrations = 0;
+    if !backup_data.discord_registrations.is_empty() {
+        // Clear existing registrations before restore
+        match crate::discord_hooks::db::clear_registrations_for_restore(&state.db) {
+            Ok(deleted) => {
+                log::info!("Cleared {} discord registrations for restore", deleted);
+            }
+            Err(e) => {
+                log::warn!("Failed to clear discord registrations for restore: {}", e);
+            }
+        }
+
+        for reg in &backup_data.discord_registrations {
+            let username = reg.discord_username.as_deref().unwrap_or("unknown");
+            match crate::discord_hooks::db::get_or_create_profile(&state.db, &reg.discord_user_id, username) {
+                Ok(_) => {
+                    if let Err(e) = crate::discord_hooks::db::register_address(&state.db, &reg.discord_user_id, &reg.public_address) {
+                        log::warn!("Failed to restore discord registration for {}: {}", reg.discord_user_id, e);
+                    } else {
+                        restored_discord_registrations += 1;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to create discord profile for {}: {}", reg.discord_user_id, e);
+                }
+            }
+        }
+    }
+
     // Auto-start channels with auto_start_on_boot setting enabled
     let mut auto_started_channels = 0;
     for (old_id, new_id) in &old_channel_to_new_id {
@@ -1475,17 +1547,19 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
         cron_job_count: Some(restored_cron_jobs),
         channel_count: Some(restored_channels),
         channel_setting_count: Some(restored_channel_settings),
+        discord_registration_count: Some(restored_discord_registrations),
         has_settings: Some(has_settings),
         has_heartbeat: Some(has_heartbeat),
         has_soul: Some(has_soul),
         message: Some(format!(
-            "Restored {} keys, {} nodes, {} connections, {} cron jobs, {} channels, {} channel settings{}{}{}",
+            "Restored {} keys, {} nodes, {} connections, {} cron jobs, {} channels, {} channel settings, {} discord registrations{}{}{}",
             restored_keys,
             restored_nodes,
             restored_connections,
             restored_cron_jobs,
             restored_channels,
             restored_channel_settings,
+            restored_discord_registrations,
             if has_settings { ", settings" } else { "" },
             if has_heartbeat { ", heartbeat" } else { "" },
             if has_soul { ", soul" } else { "" }
@@ -1564,6 +1638,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1594,6 +1669,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1616,6 +1692,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1633,6 +1710,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
             cron_job_count: None,
             channel_count: None,
             channel_setting_count: None,
+            discord_registration_count: None,
             has_settings: None,
             has_heartbeat: None,
             has_soul: None,
@@ -1654,6 +1732,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1678,6 +1757,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1715,6 +1795,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
             cron_job_count: Some(backup_data.cron_jobs.len()),
             channel_count: Some(backup_data.channels.len()),
             channel_setting_count: Some(backup_data.channel_settings.len()),
+            discord_registration_count: Some(backup_data.discord_registrations.len()),
             has_settings: Some(backup_data.bot_settings.is_some()),
             has_heartbeat: Some(backup_data.heartbeat_config.is_some()),
             has_soul: Some(backup_data.soul_document.is_some()),
@@ -1738,6 +1819,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 cron_job_count: None,
                 channel_count: None,
                 channel_setting_count: None,
+                discord_registration_count: None,
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
@@ -1767,6 +1849,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
         cron_job_count: None,
         channel_count: None,
         channel_setting_count: None,
+        discord_registration_count: None,
         has_settings: None,
         has_heartbeat: None,
         has_soul: None,
