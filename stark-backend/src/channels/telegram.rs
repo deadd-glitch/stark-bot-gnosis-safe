@@ -329,9 +329,17 @@ pub async fn start_telegram_listener(
                             .unwrap_or(false);
                         let is_command = text.starts_with('/');
 
+                        log::info!(
+                            "Telegram: Group chat {} — mentioned={}, reply_to_bot={}, command={}, bot_username=@{}",
+                            msg.chat.id, mentioned, is_reply_to_bot, is_command, bot_username
+                        );
+
                         if !mentioned && !is_reply_to_bot && !is_command {
+                            log::info!("Telegram: Ignoring message in group (bot not mentioned/replied/commanded)");
                             return Ok(());
                         }
+                    } else {
+                        log::info!("Telegram: Private chat {} — processing all messages", msg.chat.id);
                     }
 
                     // Strip bot @mention from text
@@ -585,22 +593,30 @@ pub async fn start_telegram_listener(
                     // Unsubscribe from events
                     broadcaster.unsubscribe(&client_id);
 
-                    // Wait briefly for event task to finish, then get status message ID
-                    let status_message_id = tokio::time::timeout(
-                        std::time::Duration::from_millis(500),
+                    // Wait for event task to finish, then get status message ID
+                    let status_message_id = match tokio::time::timeout(
+                        std::time::Duration::from_millis(2000),
                         event_task,
                     )
                     .await
-                    .ok()
-                    .and_then(|r| r.ok())
-                    .flatten();
+                    {
+                        Ok(Ok(id)) => id,
+                        Ok(Err(e)) => {
+                            log::warn!("Telegram: Event task panicked: {}", e);
+                            None
+                        }
+                        Err(_) => {
+                            log::warn!("Telegram: Event task timed out — status message may not be deleted");
+                            None
+                        }
+                    };
 
-                    // Delete the status message to keep chat clean
+                    // Delete the status message to keep chat clean (minimal mode cleanup)
                     if let Some(msg_id) = status_message_id {
                         if let Err(e) = bot.delete_message(msg.chat.id, msg_id).await {
                             log::warn!("Telegram: Failed to delete status message: {}", e);
                         } else {
-                            log::debug!("Telegram: Deleted status message {:?}", msg_id);
+                            log::info!("Telegram: Deleted status message {:?}", msg_id);
                         }
                     }
 

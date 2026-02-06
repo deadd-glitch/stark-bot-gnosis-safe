@@ -404,16 +404,23 @@ impl DiscordHandler {
         // Unsubscribe from events
         self.broadcaster.unsubscribe(&client_id);
 
-        // Wait briefly for the event task to finish processing, then get the status message ID
-        // We give it a short timeout to wrap up any pending edits
-        let status_message_id = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
+        // Wait for the event task to finish processing, then get the status message ID
+        let status_message_id = match tokio::time::timeout(
+            std::time::Duration::from_millis(2000),
             event_task,
         )
         .await
-        .ok()
-        .and_then(|r| r.ok())
-        .flatten();
+        {
+            Ok(Ok(id)) => id,
+            Ok(Err(e)) => {
+                log::warn!("Discord: Event task panicked: {}", e);
+                None
+            }
+            Err(_) => {
+                log::warn!("Discord: Event task timed out — status message may not be deleted");
+                None
+            }
+        };
 
         // Delete the status message now that we have the final response
         // This keeps the chat clean - users see only their message and the final answer
@@ -421,7 +428,7 @@ impl DiscordHandler {
             if let Err(e) = msg.channel_id.delete_message(&ctx.http, msg_id).await {
                 log::warn!("Discord: Failed to delete status message: {}", e);
             } else {
-                log::debug!("Discord: Deleted status message {}", msg_id);
+                log::info!("Discord: Deleted status message {}", msg_id);
             }
         }
 
