@@ -1,5 +1,6 @@
 use crate::channels::dispatcher::MessageDispatcher;
 use crate::channels::types::{ChannelType, NormalizedMessage};
+use crate::channels::util;
 use crate::db::Database;
 use crate::discord_hooks::db as user_db;
 use crate::gateway::events::EventBroadcaster;
@@ -88,48 +89,6 @@ fn strip_bot_mention(text: &str, bot_username: &str) -> String {
     }
     result.push_str(&text[last_end..]);
     result.trim().to_string()
-}
-
-/// Split a message into chunks respecting Telegram's 4096 character limit
-fn split_message(text: &str, max_len: usize) -> Vec<String> {
-    if text.len() <= max_len {
-        return vec![text.to_string()];
-    }
-
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-
-    for line in text.lines() {
-        if current.len() + line.len() + 1 > max_len {
-            if !current.is_empty() {
-                chunks.push(current);
-                current = String::new();
-            }
-            if line.len() > max_len {
-                let mut remaining = line;
-                while remaining.len() > max_len {
-                    chunks.push(remaining[..max_len].to_string());
-                    remaining = &remaining[max_len..];
-                }
-                if !remaining.is_empty() {
-                    current = remaining.to_string();
-                }
-            } else {
-                current = line.to_string();
-            }
-        } else {
-            if !current.is_empty() {
-                current.push('\n');
-            }
-            current.push_str(line);
-        }
-    }
-
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-
-    chunks
 }
 
 /// Check for shortcircuit commands (register, status, help, love, unregister)
@@ -461,28 +420,12 @@ pub async fn start_telegram_listener(
                         let mut status_message_id: Option<MessageId> = None;
 
                         while let Some(event) = event_rx.recv().await {
-                            // Only forward events for this specific channel AND chat session
-                            let event_channel_id =
-                                event.data.get("channel_id").and_then(|v| v.as_i64());
-                            let event_chat_id =
-                                event.data.get("chat_id").and_then(|v| v.as_str());
-
-                            match (event_channel_id, event_chat_id) {
-                                (Some(ch_id), Some(chat_id)) => {
-                                    if ch_id != channel_id_for_events
-                                        || chat_id != chat_id_str_for_events
-                                    {
-                                        continue;
-                                    }
-                                }
-                                (Some(ch_id), None) => {
-                                    if ch_id != channel_id_for_events {
-                                        continue;
-                                    }
-                                }
-                                _ => {
-                                    continue;
-                                }
+                            if !util::event_matches_session(
+                                &event.data,
+                                channel_id_for_events,
+                                &chat_id_str_for_events,
+                            ) {
+                                continue;
                             }
 
                             let message_text = match event.event.as_str() {
@@ -528,7 +471,7 @@ pub async fn start_telegram_listener(
                                     // say_to_user: send as NEW message directly (not status edit)
                                     if tool_name == "say_to_user" {
                                         if success && !content.is_empty() {
-                                            let chunks = split_message(content, 4096);
+                                            let chunks = util::split_message(content, 4096);
                                             for chunk in &chunks {
                                                 if let Err(e) = bot_for_events
                                                     .send_message(telegram_chat_id, chunk)
@@ -668,7 +611,7 @@ pub async fn start_telegram_listener(
 
                     // Send final response
                     if result.error.is_none() && !result.response.is_empty() {
-                        let chunks = split_message(&result.response, 4096);
+                        let chunks = util::split_message(&result.response, 4096);
                         for chunk in chunks {
                             if let Err(e) = bot
                                 .send_message(msg.chat.id, &chunk)

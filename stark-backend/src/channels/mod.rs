@@ -5,6 +5,7 @@ pub mod slack;
 pub mod telegram;
 pub mod twitter;
 pub mod types;
+pub mod util;
 
 pub use dispatcher::MessageDispatcher;
 pub use safe_mode_rate_limiter::{SafeModeChannelRateLimiter, SafeModeQueryResult};
