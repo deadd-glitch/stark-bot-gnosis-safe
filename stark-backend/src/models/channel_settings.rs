@@ -62,6 +62,8 @@ pub enum ChannelSettingKey {
     TwitterMaxMentionsPerHour,
     /// Twitter: Admin X account numeric user ID — tweets from this account bypass safe mode
     TwitterAdminXAccount,
+    /// Telegram: Admin user ID — messages from this user bypass safe mode
+    TelegramAdminUserId,
 }
 
 impl ChannelSettingKey {
@@ -81,6 +83,7 @@ impl ChannelSettingKey {
             Self::TwitterReplyChance => "Reply Chance",
             Self::TwitterMaxMentionsPerHour => "Max Replies Per Hour",
             Self::TwitterAdminXAccount => "Admin X User ID (Optional)",
+            Self::TelegramAdminUserId => "Admin User ID (Optional)",
         }
     }
 
@@ -145,6 +148,12 @@ impl ChannelSettingKey {
                  Find your ID at tweeterid.com. \
                  WARNING: This account will have full agent access — only set this to an account you control."
             }
+            Self::TelegramAdminUserId => {
+                "Telegram numeric user ID of the admin. Messages from this user get full agent access; \
+                 all other users are restricted to safe mode. If not set, all users get full access \
+                 (backwards-compatible). Find your ID by messaging @userinfobot on Telegram. \
+                 WARNING: This account gets full agent access — only set this to a user you control."
+            }
         }
     }
 
@@ -164,6 +173,7 @@ impl ChannelSettingKey {
             Self::TwitterReplyChance => SettingInputType::Select,
             Self::TwitterMaxMentionsPerHour => SettingInputType::Number,
             Self::TwitterAdminXAccount => SettingInputType::Text,
+            Self::TelegramAdminUserId => SettingInputType::Text,
         }
     }
 
@@ -183,6 +193,7 @@ impl ChannelSettingKey {
             Self::TwitterReplyChance => "",
             Self::TwitterMaxMentionsPerHour => "0",
             Self::TwitterAdminXAccount => "1234567890123456789",
+            Self::TelegramAdminUserId => "123456789",
         }
     }
 
@@ -217,6 +228,7 @@ impl ChannelSettingKey {
             Self::TwitterReplyChance => "100",
             Self::TwitterMaxMentionsPerHour => "0",
             Self::TwitterAdminXAccount => "",
+            Self::TelegramAdminUserId => "",
         }
     }
 
@@ -337,6 +349,7 @@ pub fn get_settings_for_channel_type(channel_type: ChannelType) -> Vec<ChannelSe
         ],
         ChannelType::Telegram => vec![
             ChannelSettingKey::TelegramBotToken.into(),
+            ChannelSettingKey::TelegramAdminUserId.into(),
         ],
         ChannelType::Slack => vec![
             ChannelSettingKey::SlackBotToken.into(),
@@ -380,10 +393,11 @@ mod tests {
     #[test]
     fn test_telegram_settings() {
         let settings = get_settings_for_channel_type(ChannelType::Telegram);
-        // 1 common + 1 Telegram-specific (bot_token)
-        assert_eq!(settings.len(), 2);
+        // 1 common + 2 Telegram-specific (bot_token, admin_user_id)
+        assert_eq!(settings.len(), 3);
         assert_eq!(settings[0].key, "auto_start_on_boot");
         assert_eq!(settings[1].key, "telegram_bot_token");
+        assert_eq!(settings[2].key, "telegram_admin_user_id");
     }
 
     #[test]

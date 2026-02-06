@@ -248,6 +248,6 @@ mod tests {
             .await;
 
         assert!(!result.success);
-        assert!(result.error.unwrap().contains("outside the workspace"));
+        assert!(result.error.unwrap().contains("outside the allowed directory"));
     }
 }

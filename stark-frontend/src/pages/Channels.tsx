@@ -40,7 +40,7 @@ function getChannelHints(channelType: string): string[] {
       ];
     case 'telegram':
       return [
-        '<strong>Warning: Telegram channels have no safe mode.</strong> Any user who messages this bot gets full unrestricted agent access (all tools, exec, transactions). Only use Telegram for private bots where you trust all users.',
+        'To use in a group, set an <strong>Admin User ID</strong> in channel settings. Only the admin gets full agent access; all other users are restricted to safe mode. Without an admin configured, all users have full unrestricted access.',
       ];
     default:
       return [];

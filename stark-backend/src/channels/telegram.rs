@@ -1,7 +1,9 @@
 use crate::channels::dispatcher::MessageDispatcher;
 use crate::channels::types::{ChannelType, NormalizedMessage};
+use crate::db::Database;
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
+use crate::models::channel_settings::ChannelSettingKey;
 use crate::models::Channel;
 use std::sync::Arc;
 use teloxide::prelude::*;
@@ -55,6 +57,7 @@ pub async fn start_telegram_listener(
     channel: Channel,
     dispatcher: Arc<MessageDispatcher>,
     broadcaster: Arc<EventBroadcaster>,
+    db: Arc<Database>,
     shutdown_rx: oneshot::Receiver<()>,
 ) -> Result<(), String> {
     let channel_id = channel.id;
@@ -84,6 +87,26 @@ pub async fn start_telegram_listener(
         }
     }
 
+    // Load admin user ID setting
+    let admin_user_id: Option<String> = db
+        .get_channel_setting(channel_id, ChannelSettingKey::TelegramAdminUserId.as_ref())
+        .ok()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Some(ref admin_id) = admin_user_id {
+        log::info!(
+            "Telegram [{}]: Admin user ID configured: {} — non-admin users will use safe mode",
+            channel_name, admin_id
+        );
+    } else {
+        log::info!(
+            "Telegram [{}]: No admin user ID configured — all users get full access",
+            channel_name
+        );
+    }
+
     // Emit started event
     broadcaster.broadcast(GatewayEvent::channel_started(
         channel_id,
@@ -99,6 +122,7 @@ pub async fn start_telegram_listener(
         move |bot: Bot, msg: teloxide::types::Message, dispatcher: Arc<MessageDispatcher>| {
             let channel_id = channel_id;
             let broadcaster = broadcaster_for_handler.clone();
+            let admin_user_id = admin_user_id.clone();
             async move {
                 log::info!("Telegram: Received update from chat {}", msg.chat.id);
 
@@ -121,6 +145,24 @@ pub async fn start_telegram_listener(
                         if text.len() > 50 { format!("{}...", text.chars().take(50).collect::<String>()) } else { text.to_string() }
                     );
 
+                    // Determine safe mode: if admin is configured, only admin gets full access
+                    let force_safe_mode = match &admin_user_id {
+                        Some(admin_id) => admin_id != &user_id,
+                        None => false,
+                    };
+
+                    if force_safe_mode {
+                        log::info!(
+                            "Telegram: User {} ({}) is not admin — using safe mode",
+                            user_name, user_id
+                        );
+                    } else if admin_user_id.is_some() {
+                        log::info!(
+                            "Telegram: User {} ({}) is admin — full access",
+                            user_name, user_id
+                        );
+                    }
+
                     let normalized = NormalizedMessage {
                         channel_id,
                         channel_type: ChannelType::Telegram.to_string(),
@@ -131,7 +173,7 @@ pub async fn start_telegram_listener(
                         message_id: Some(msg.id.to_string()),
                         session_mode: None,
                         selected_network: None,
-                        force_safe_mode: false,
+                        force_safe_mode,
                     };
 
                     // Subscribe to events for real-time tool call forwarding

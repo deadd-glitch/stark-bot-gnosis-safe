@@ -179,11 +179,13 @@ impl ChannelManager {
 
         match channel_type_enum {
             types::ChannelType::Telegram => {
+                let db = self.db.clone();
                 tokio::spawn(async move {
                     let result = telegram::start_telegram_listener(
                         channel,
                         dispatcher,
                         broadcaster.clone(),
+                        db,
                         shutdown_rx,
                     )
                     .await;

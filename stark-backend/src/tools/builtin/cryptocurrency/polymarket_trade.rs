@@ -993,34 +993,15 @@ mod tests {
         // Should return at least some markets (polymarket always has politics markets)
         assert!(!markets.is_empty(), "Should return at least one politics market");
 
-        // Verify each market has expected structure
+        // Verify each market has expected structure (search returns summaries without outcomes)
         for market in markets {
             // Each market should have a title
-            assert!(market.get("title").is_some(), "Market should have title");
+            assert!(market.get("title").is_some(), "Market should have title: {:?}", market);
             let title = market["title"].as_str().unwrap();
             assert!(!title.is_empty(), "Title should not be empty");
 
-            // Should have outcomes with token_ids for trading
-            let outcomes = market.get("outcomes")
-                .and_then(|o| o.as_array());
-            assert!(outcomes.is_some(), "Market should have outcomes: {:?}", market);
-
-            if let Some(outcomes) = outcomes {
-                for outcome in outcomes {
-                    // Each outcome should have question with tradeable outcomes
-                    if let Some(outcome_arr) = outcome.get("outcomes").and_then(|o| o.as_array()) {
-                        for tradeable in outcome_arr {
-                            // Should have name and token_id for trading
-                            assert!(tradeable.get("name").is_some(), "Outcome should have name");
-                            assert!(tradeable.get("token_id").is_some(), "Outcome should have token_id for trading");
-
-                            // Token ID should be non-empty for active markets
-                            let token_id = tradeable["token_id"].as_str().unwrap_or("");
-                            // Some outcomes may have empty token_ids if not tradeable
-                        }
-                    }
-                }
-            }
+            // Summaries should have a slug for further lookup
+            assert!(market.get("slug").is_some(), "Market should have slug: {:?}", market);
         }
 
         println!("Found {} politics markets", markets.len());
