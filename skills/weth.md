@@ -1,11 +1,11 @@
 ---
 name: weth
 description: "Wrap ETH to WETH or unwrap WETH to ETH on Base or Mainnet"
-version: 2.5.0
+version: 2.6.0
 author: starkbot
 metadata: {"clawdbot":{"emoji":"🔄"}}
 tags: [crypto, defi, finance, weth, wrap, unwrap, base]
-requires_tools: [register_set, web3_preset_function_call, list_queued_web3_tx, broadcast_web3_tx]
+requires_tools: [to_raw_amount, web3_preset_function_call, list_queued_web3_tx, broadcast_web3_tx]
 ---
 
 # WETH Wrap/Unwrap
@@ -18,10 +18,9 @@ Convert between ETH and WETH (Wrapped Ether) using presets.
 
 ## Wrap ETH to WETH
 
-### 1. Set amount to wrap (in wei)
-```tool:register_set
-key: wrap_amount
-value: "1000000000000000"
+### 1. Set amount to wrap (convert human amount to wei)
+```json
+{"tool": "to_raw_amount", "amount": "0.001", "decimals": 18, "cache_as": "wrap_amount"}
 ```
 
 ### 2. Execute wrap
@@ -34,10 +33,9 @@ network: base
 
 ## Unwrap WETH to ETH
 
-### 1. Set amount to unwrap (in wei)
-```tool:register_set
-key: unwrap_amount
-value: "1000000000000000"
+### 1. Set amount to unwrap (convert human amount to wei)
+```json
+{"tool": "to_raw_amount", "amount": "0.001", "decimals": 18, "cache_as": "unwrap_amount"}
 ```
 
 ### 2. Execute unwrap

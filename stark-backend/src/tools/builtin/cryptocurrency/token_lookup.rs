@@ -241,13 +241,18 @@ impl Tool for TokenLookupTool {
                 let decimals_register = format!("{}_decimals", params.cache_as);
                 context.set_register(&decimals_register, json!(token.decimals), "token_lookup");
 
-                // Always set 'token_address' and 'token_decimals' for preset compatibility
-                // (e.g., erc20_balance preset expects 'token_address' register)
-                context.set_register("token_address", json!(&token.address), "token_lookup");
-                context.set_register("token_decimals", json!(token.decimals), "token_lookup");
+                // Only set 'token_address' / 'token_decimals' when cache_as is the default
+                // ("token_address"). When the caller uses a custom cache_as (e.g. "sell_token",
+                // "buy_token"), we must NOT overwrite token_address — otherwise a second
+                // token_lookup would clobber the first and break presets that still reference it.
+                if params.cache_as == "token_address" {
+                    // cache_as is already "token_address", so the set_register above
+                    // already wrote it — just set token_decimals as well.
+                    context.set_register("token_decimals", json!(token.decimals), "token_lookup");
+                }
 
                 log::info!(
-                    "[token_lookup] Cached {} in registers: '{}'={}, '{}'={}, '{}'={}, 'token_address'={}, 'token_decimals'={}",
+                    "[token_lookup] Cached {} in registers: '{}'={}, '{}'={}, '{}'={}{}",
                     params.symbol,
                     params.cache_as,
                     token.address,
@@ -255,18 +260,23 @@ impl Tool for TokenLookupTool {
                     params.symbol.to_uppercase(),
                     decimals_register,
                     token.decimals,
-                    token.address,
-                    token.decimals
+                    if params.cache_as == "token_address" { ", 'token_decimals'=set" } else { "" }
                 );
 
+                let extra_note = if params.cache_as == "token_address" {
+                    " (also set 'token_decimals')"
+                } else {
+                    ""
+                };
                 ToolResult::success(format!(
-                    "{} ({}) on {}\nAddress: {}\nDecimals: {}\nCached in register: '{}' (also set 'token_address' and 'token_decimals')",
+                    "{} ({}) on {}\nAddress: {}\nDecimals: {}\nCached in register: '{}'{}",
                     token.name,
                     params.symbol.to_uppercase(),
                     params.network,
                     token.address,
                     token.decimals,
-                    params.cache_as
+                    params.cache_as,
+                    extra_note
                 )).with_metadata(json!({
                     "symbol": params.symbol.to_uppercase(),
                     "address": token.address,
@@ -381,5 +391,93 @@ mod tests {
         let metadata = result.metadata.unwrap();
         assert_eq!(metadata["network"], "base");
         assert_eq!(metadata["address"], "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
+    }
+
+    #[tokio::test]
+    async fn test_default_cache_as_sets_token_address() {
+        setup();
+        let tool = TokenLookupTool::new();
+        let context = ToolContext::default();
+
+        // Default cache_as = "token_address" — should set token_address AND token_decimals
+        let params = json!({ "symbol": "USDC", "network": "base" });
+        let result = tool.execute(params, &context).await;
+        assert!(result.success);
+
+        // token_address should be set (same as cache_as target)
+        assert_eq!(
+            context.registers.get("token_address").unwrap(),
+            json!("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+        );
+        // token_decimals should also be set
+        assert_eq!(context.registers.get("token_decimals").unwrap(), json!(6));
+    }
+
+    #[tokio::test]
+    async fn test_custom_cache_as_does_not_set_token_address() {
+        setup();
+        let tool = TokenLookupTool::new();
+        let context = ToolContext::default();
+
+        // Custom cache_as = "sell_token" — should NOT set token_address
+        let params = json!({ "symbol": "USDC", "network": "base", "cache_as": "sell_token" });
+        let result = tool.execute(params, &context).await;
+        assert!(result.success);
+
+        // sell_token should be set
+        assert_eq!(
+            context.registers.get("sell_token").unwrap(),
+            json!("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+        );
+        assert_eq!(context.registers.get("sell_token_symbol").unwrap(), json!("USDC"));
+        assert_eq!(context.registers.get("sell_token_decimals").unwrap(), json!(6));
+
+        // token_address should NOT be set
+        assert!(
+            context.registers.get("token_address").is_none(),
+            "token_address should not be set when cache_as is custom"
+        );
+        assert!(
+            context.registers.get("token_decimals").is_none(),
+            "token_decimals should not be set when cache_as is custom"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_two_lookups_do_not_clobber_each_other() {
+        setup();
+        let tool = TokenLookupTool::new();
+        let context = ToolContext::default();
+
+        // First lookup: sell_token = WETH
+        let params1 = json!({ "symbol": "WETH", "network": "base", "cache_as": "sell_token" });
+        let result1 = tool.execute(params1, &context).await;
+        assert!(result1.success);
+
+        // Second lookup: buy_token = USDC
+        let params2 = json!({ "symbol": "USDC", "network": "base", "cache_as": "buy_token" });
+        let result2 = tool.execute(params2, &context).await;
+        assert!(result2.success);
+
+        // sell_token should still be WETH (not overwritten by USDC lookup)
+        assert_eq!(
+            context.registers.get("sell_token").unwrap(),
+            json!("0x4200000000000000000000000000000000000006"),
+            "sell_token should still be WETH after buy_token lookup"
+        );
+        assert_eq!(context.registers.get("sell_token_decimals").unwrap(), json!(18));
+
+        // buy_token should be USDC
+        assert_eq!(
+            context.registers.get("buy_token").unwrap(),
+            json!("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
+        );
+        assert_eq!(context.registers.get("buy_token_decimals").unwrap(), json!(6));
+
+        // Neither should have set token_address
+        assert!(
+            context.registers.get("token_address").is_none(),
+            "token_address should not be set by custom cache_as lookups"
+        );
     }
 }

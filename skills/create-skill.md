@@ -193,7 +193,7 @@ Common tools you can use in skills:
 ### Blockchain/Web3
 | Tool | Purpose |
 |------|---------|
-| `web3_function_call` | Smart contract calls |
+| `web3_preset_function_call` | Preset smart contract calls |
 | `web3_tx` | Sign/send transactions |
 | `token_lookup` | Resolve token addresses |
 
@@ -208,8 +208,8 @@ Common tools you can use in skills:
 |------|---------|
 | `memory_store` | Save to long-term memory |
 | `memory_get` | Retrieve from memory |
-| `register_set` | Set temporary register value |
-| `register_get` | Get register value |
+| `set_address` | Set validated address register |
+| `to_raw_amount` | Convert human amounts to raw units |
 
 ---
 
@@ -448,17 +448,17 @@ Supported script languages:
 ## Common Patterns
 
 ### Register Pattern (Prevent Hallucination)
-For critical values, use registers instead of inline values:
+For critical values, use typed tools to set registers instead of inline values:
 
 ```markdown
-1. Store value in register:
+1. Store address in register:
 \`\`\`json
-{"tool": "register_set", "key": "amount", "value": "100"}
+{"tool": "set_address", "register": "send_to", "address": "0x1234..."}
 \`\`\`
 
-2. Use from register:
+2. Convert amount safely:
 \`\`\`json
-{"tool": "web3_tx", "from_register": "tx_data"}
+{"tool": "to_raw_amount", "amount": "0.01", "decimals": 18, "cache_as": "amount_raw"}
 \`\`\`
 ```
 

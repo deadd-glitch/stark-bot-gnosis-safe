@@ -69,7 +69,7 @@ impl SendEthTool {
         SendEthTool {
             definition: ToolDefinition {
                 name: "send_eth".to_string(),
-                description: "Send native ETH to an address. Reads 'send_to' (recipient) and 'amount_raw' (wei value) from registers. Use 'register_set' to set 'send_to', and 'to_raw_amount' with decimals=18 to set 'amount_raw'. Transaction is QUEUED - use broadcast_web3_tx to broadcast.".to_string(),
+                description: "Send native ETH to an address. Reads 'send_to' (recipient) and 'amount_raw' (wei value) from registers. Use 'set_address' to set 'send_to', and 'to_raw_amount' with decimals=18 to set 'amount_raw'. Transaction is QUEUED - use broadcast_web3_tx to broadcast.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,
@@ -236,13 +236,13 @@ impl Default for SendEthTool {
 impl ResolvedTxData {
     /// Resolve transaction data from individual registers (send_to, amount_raw)
     /// IMPORTANT: We ONLY read from registers to prevent hallucination of tx data
-    /// - 'send_to' must be set via register_set (validated as address)
+    /// - 'send_to' must be set via set_address (validated as address)
     /// - 'amount_raw' must be set via to_raw_amount tool (enforced by blocked registers)
     fn from_registers(context: &ToolContext) -> Result<Self, String> {
         // Read recipient address from 'send_to' register
         let to = context.registers.get("send_to")
             .ok_or_else(|| {
-                "Register 'send_to' not found. Use register_set to set the recipient address first.\n\nExample:\n```tool:register_set\nkey: send_to\nvalue: \"0x1234...\"```".to_string()
+                "Register 'send_to' not found. Use set_address to set the recipient address first.\n\nExample:\n```json\n{\"tool\": \"set_address\", \"register\": \"send_to\", \"address\": \"0x1234...\"}```".to_string()
             })?
             .as_str()
             .ok_or_else(|| "Register 'send_to' must be a string (Ethereum address)".to_string())?
@@ -573,7 +573,7 @@ mod tests {
         use crate::tools::RegisterStore;
 
         let registers = RegisterStore::new();
-        registers.set("send_to", json!("0x1234567890abcdef1234567890abcdef12345678"), "register_set");
+        registers.set("send_to", json!("0x1234567890abcdef1234567890abcdef12345678"), "set_address");
         registers.set("amount_raw", json!("100000000000000"), "to_raw_amount");
 
         let context = crate::tools::ToolContext::new()
@@ -606,7 +606,7 @@ mod tests {
         use crate::tools::RegisterStore;
 
         let registers = RegisterStore::new();
-        registers.set("send_to", json!("0x1234567890abcdef1234567890abcdef12345678"), "register_set");
+        registers.set("send_to", json!("0x1234567890abcdef1234567890abcdef12345678"), "set_address");
 
         let context = crate::tools::ToolContext::new()
             .with_registers(registers);
@@ -621,7 +621,7 @@ mod tests {
         use crate::tools::RegisterStore;
 
         let registers = RegisterStore::new();
-        registers.set("send_to", json!("not-an-address"), "register_set");
+        registers.set("send_to", json!("not-an-address"), "set_address");
         registers.set("amount_raw", json!("100000000000000"), "to_raw_amount");
 
         let context = crate::tools::ToolContext::new()
@@ -637,7 +637,7 @@ mod tests {
         use crate::tools::RegisterStore;
 
         let registers = RegisterStore::new();
-        registers.set("send_to", json!("0x1234567890abcdef1234567890abcdef12345678"), "register_set");
+        registers.set("send_to", json!("0x1234567890abcdef1234567890abcdef12345678"), "set_address");
         registers.set("amount_raw", json!("not-a-number"), "to_raw_amount");
 
         let context = crate::tools::ToolContext::new()
@@ -653,7 +653,7 @@ mod tests {
         use crate::tools::RegisterStore;
 
         let registers = RegisterStore::new();
-        registers.set("send_to", json!("0x0000000000000000000000000000000000000000"), "register_set");
+        registers.set("send_to", json!("0x0000000000000000000000000000000000000000"), "set_address");
         registers.set("amount_raw", json!("100000000000000"), "to_raw_amount");
 
         let context = crate::tools::ToolContext::new()

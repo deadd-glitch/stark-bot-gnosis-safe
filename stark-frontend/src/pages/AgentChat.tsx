@@ -508,12 +508,24 @@ export default function AgentChat() {
       const event = data as { error: string; timestamp: string };
       console.error('[Agent] Error:', event.error);
       setIsLoading(false);
+
+      // Check if this is an x402 payment failure with low balance
+      const errorLower = event.error.toLowerCase();
+      const isX402Failure = errorLower.includes('x402') || errorLower.includes('402') || errorLower.includes('payment');
+      const balanceNum = usdcBalance ? parseFloat(usdcBalance) : null;
+      const isLowBalance = balanceNum !== null && balanceNum < 0.1;
+
+      let content = `⚠️ ${event.error}`;
+      if (isX402Failure && isLowBalance) {
+        content += `\n\n💰 Your USDC balance on Base is ${balanceNum.toFixed(4)} USDC — you need to add funds to use this x402 agent endpoint.`;
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: 'system' as MessageRole,
-          content: `⚠️ ${event.error}`,
+          content,
           timestamp: new Date(event.timestamp),
           sessionId,
         },
@@ -1207,7 +1219,17 @@ export default function AgentChat() {
       ));
       addMessage('assistant', response.response);
     } catch (error) {
-      addMessage('error', error instanceof Error ? error.message : 'Failed to send message');
+      const errorMsg = error instanceof Error ? error.message : 'Failed to send message';
+      const errorLower = errorMsg.toLowerCase();
+      const isX402Failure = errorLower.includes('x402') || errorLower.includes('402') || errorLower.includes('payment');
+      const balanceNum = usdcBalance ? parseFloat(usdcBalance) : null;
+      const isLowBalance = balanceNum !== null && balanceNum < 0.1;
+
+      if (isX402Failure && isLowBalance) {
+        addMessage('error', `${errorMsg}\n\n💰 Your USDC balance on Base is ${balanceNum!.toFixed(4)} USDC — you need to add funds to use this x402 agent endpoint.`);
+      } else {
+        addMessage('error', errorMsg);
+      }
     } finally {
       setIsLoading(false);
     }

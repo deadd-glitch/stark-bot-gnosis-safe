@@ -171,7 +171,7 @@ impl Tool for SelectWeb3NetworkTool {
             "network": canonical_name,
             "display_name": display_name,
             "chain_id": chain_id,
-            "register_set": "network_name"
+            "register_source": "select_web3_network"
         }))
     }
 }

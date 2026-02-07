@@ -2,6 +2,7 @@
 //!
 //! Essential tools for agent operation, user interaction, and task management.
 
+mod add_task;
 mod agent_send;
 mod api_keys_check;
 mod ask_user;
@@ -13,6 +14,7 @@ mod set_agent_subtype;
 mod subagent;
 mod task_complete;
 
+pub use add_task::AddTaskTool;
 pub use agent_send::AgentSendTool;
 pub use api_keys_check::ApiKeysCheckTool;
 pub use ask_user::AskUserTool;

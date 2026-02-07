@@ -196,7 +196,7 @@ fn run_deterministic_checks(
             return Err(format!(
                 "Transaction blocked: recipient address {} was not found in any register \
                  or in the context bank. This may indicate a hallucinated address. \
-                 Use register_set to store the address first.",
+                 Use set_address to store the address first.",
                 intent.to
             ));
         }
@@ -630,7 +630,7 @@ mod tests {
             "wallet_provider",
         );
         // Also add send_to so register-exists check passes
-        registers.set("send_to", serde_json::json!(wallet), "register_set");
+        registers.set("send_to", serde_json::json!(wallet), "set_address");
         let ctx = ToolContext::new().with_registers(registers);
 
         let err = run_deterministic_checks(&intent, &ctx).unwrap_err();
@@ -654,7 +654,7 @@ mod tests {
         let intent = make_intent("eth_transfer", addr);
 
         let registers = RegisterStore::new();
-        registers.set("send_to", serde_json::json!(addr), "register_set");
+        registers.set("send_to", serde_json::json!(addr), "set_address");
         let ctx = ToolContext::new().with_registers(registers);
 
         assert!(run_deterministic_checks(&intent, &ctx).is_ok());
@@ -734,7 +734,7 @@ mod tests {
         let intent = make_intent("eth_transfer", addr);
 
         let registers = RegisterStore::new();
-        registers.set("send_to", serde_json::json!(addr), "register_set");
+        registers.set("send_to", serde_json::json!(addr), "set_address");
         let mut ctx = ToolContext::new().with_registers(registers);
         ctx.extra.insert(
             "original_user_message".to_string(),
@@ -752,7 +752,7 @@ mod tests {
         let intent = make_intent("eth_transfer", addr);
 
         let registers = RegisterStore::new();
-        registers.set("send_to", serde_json::json!(addr), "register_set");
+        registers.set("send_to", serde_json::json!(addr), "set_address");
         let mut ctx = ToolContext::new().with_registers(registers);
         ctx.extra.insert(
             "original_user_message".to_string(),
@@ -775,7 +775,7 @@ mod tests {
         let intent = make_intent("eth_transfer", addr);
 
         let registers = RegisterStore::new();
-        registers.set("send_to", serde_json::json!(addr), "register_set");
+        registers.set("send_to", serde_json::json!(addr), "set_address");
         let ctx = ToolContext::new().with_registers(registers);
 
         let result = verify_intent(&intent, &ctx, None).await;
@@ -796,7 +796,7 @@ mod tests {
         let intent = make_intent("eth_transfer", addr);
 
         let registers = RegisterStore::new();
-        registers.set("send_to", serde_json::json!(addr), "register_set");
+        registers.set("send_to", serde_json::json!(addr), "set_address");
         let mut ctx = ToolContext::new().with_registers(registers);
         ctx.extra.insert(
             "original_user_message".to_string(),
@@ -819,7 +819,7 @@ mod tests {
         let intent = make_intent("eth_transfer", addr);
 
         let registers = RegisterStore::new();
-        registers.set("send_to", serde_json::json!(addr), "register_set");
+        registers.set("send_to", serde_json::json!(addr), "set_address");
         let mut ctx = ToolContext::new().with_registers(registers);
         ctx.extra.insert(
             "original_user_message".to_string(),
@@ -840,7 +840,7 @@ mod tests {
         let intent = make_intent("eth_transfer", addr);
 
         let registers = RegisterStore::new();
-        registers.set("send_to", serde_json::json!(addr), "register_set");
+        registers.set("send_to", serde_json::json!(addr), "set_address");
         let mut ctx = ToolContext::new().with_registers(registers);
         ctx.extra.insert(
             "original_user_message".to_string(),
@@ -859,7 +859,7 @@ mod tests {
         let intent = make_intent("eth_transfer", addr);
 
         let registers = RegisterStore::new();
-        registers.set("send_to", serde_json::json!(addr), "register_set");
+        registers.set("send_to", serde_json::json!(addr), "set_address");
         let mut ctx = ToolContext::new().with_registers(registers);
         ctx.extra.insert(
             "original_user_message".to_string(),
@@ -893,7 +893,7 @@ mod tests {
 
         // Set up registers exactly as the real send_eth flow does
         let registers = RegisterStore::new();
-        registers.set("send_to", serde_json::json!(addr), "register_set");
+        registers.set("send_to", serde_json::json!(addr), "set_address");
         registers.set("amount_raw", serde_json::json!("10000000000000000"), "to_raw_amount");
         registers.set("wallet_address", serde_json::json!(wallet), "wallet_provider");
         let ctx = ToolContext::new().with_registers(registers);

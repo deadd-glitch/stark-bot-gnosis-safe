@@ -2130,6 +2130,43 @@ impl MessageDispatcher {
                                 user_question_content = result.content.clone();
                                 log::info!("[ORCHESTRATED_LOOP] Tool requires user response, will break after processing");
                             }
+                            // Check if add_task was called - agent wants to insert a new task
+                            if metadata.get("add_task").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                if let Some(desc) = metadata.get("task_description").and_then(|v| v.as_str()) {
+                                    let position = metadata.get("task_position")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("front");
+                                    let new_ids = match position {
+                                        "back" => orchestrator.append_task(desc.to_string()),
+                                        _ => orchestrator.insert_task_front(desc.to_string()),
+                                    };
+                                    log::info!(
+                                        "[ORCHESTRATED_LOOP] add_task: inserted task(s) {:?} at {} — '{}'",
+                                        new_ids, position, desc
+                                    );
+                                    // If task_fully_completed was already processed this turn
+                                    // (AI called it before add_task), the session was marked complete
+                                    // with no pending tasks. Now that we've added a task, undo that
+                                    // and advance to the new task.
+                                    if orchestrator_complete && !orchestrator.all_tasks_complete() {
+                                        orchestrator_complete = false;
+                                        final_summary.clear();
+                                        log::info!(
+                                            "[ORCHESTRATED_LOOP] add_task: resetting orchestrator_complete — new pending tasks exist"
+                                        );
+                                        self.advance_to_next_task_or_complete(
+                                            original_message.channel_id,
+                                            session_id,
+                                            orchestrator,
+                                        );
+                                    }
+                                    self.broadcast_task_queue_update(
+                                        original_message.channel_id,
+                                        session_id,
+                                        orchestrator,
+                                    );
+                                }
+                            }
                             // Check if task_fully_completed was called - agent signals current task is done
                             if metadata.get("task_fully_completed").and_then(|v| v.as_bool()).unwrap_or(false) {
                                 let summary = metadata.get("summary")
@@ -2784,6 +2821,41 @@ impl MessageDispatcher {
                                         waiting_for_user_response = true;
                                         user_question_content = result.content.clone();
                                         log::info!("[TEXT_ORCHESTRATED] Tool requires user response, will break after processing");
+                                    }
+                                    // Check if add_task was called - agent wants to insert a new task
+                                    if metadata.get("add_task").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                        if let Some(desc) = metadata.get("task_description").and_then(|v| v.as_str()) {
+                                            let position = metadata.get("task_position")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("front");
+                                            let new_ids = match position {
+                                                "back" => orchestrator.append_task(desc.to_string()),
+                                                _ => orchestrator.insert_task_front(desc.to_string()),
+                                            };
+                                            log::info!(
+                                                "[TEXT_ORCHESTRATED] add_task: inserted task(s) {:?} at {} — '{}'",
+                                                new_ids, position, desc
+                                            );
+                                            // If task_fully_completed was already processed this turn,
+                                            // undo the completion since we now have pending tasks.
+                                            if orchestrator_complete && !orchestrator.all_tasks_complete() {
+                                                orchestrator_complete = false;
+                                                final_response.clear();
+                                                log::info!(
+                                                    "[TEXT_ORCHESTRATED] add_task: resetting orchestrator_complete — new pending tasks exist"
+                                                );
+                                                self.advance_to_next_task_or_complete(
+                                                    original_message.channel_id,
+                                                    session_id,
+                                                    orchestrator,
+                                                );
+                                            }
+                                            self.broadcast_task_queue_update(
+                                                original_message.channel_id,
+                                                session_id,
+                                                orchestrator,
+                                            );
+                                        }
                                     }
                                     // Check if task_fully_completed was called - agent signals it's done
                                     if metadata.get("task_fully_completed").and_then(|v| v.as_bool()).unwrap_or(false) {

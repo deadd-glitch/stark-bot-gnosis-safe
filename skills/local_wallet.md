@@ -5,7 +5,7 @@ version: 2.4.0
 author: starkbot
 metadata: {"clawdbot":{"emoji":"wallet"}}
 tags: [wallet, crypto, finance, local, burner, address, base, ethereum, rpc]
-requires_tools: [token_lookup, ask_user, x402_rpc, web3_preset_function_call, register_set]
+requires_tools: [token_lookup, ask_user, x402_rpc, web3_preset_function_call]
 ---
 
 # Local Wallet Access
@@ -16,7 +16,7 @@ Check balances and interact with the local burner wallet via RPC calls.
 
 **DO NOT call `use_skill` again.** This skill file contains instructions. You must now:
 1. Read these instructions
-2. Call the actual tools directly (e.g., `x402_rpc`, `ask_user`, `register_set`, `web3_preset_function_call`)
+2. Call the actual tools directly (e.g., `x402_rpc`, `ask_user`, `token_lookup`, `web3_preset_function_call`)
 3. Look for context about the currently selected network
 
 **Example:** To check ETH balance, call `x402_rpc`:
@@ -167,14 +167,10 @@ call_only: true
 
 ## COMMON MISTAKE TO AVOID
 
-**NEVER manually construct a balanceOf call like this:**
-```tool:web3_function_call
-# WRONG - This checks the CONTRACT's balance, not YOUR wallet!
-abi: erc20
-contract: "0x587..."
-function: balanceOf
-params: ["0x587..."]  # <- WRONG: This is the contract address!
-call_only: true
+**NEVER manually construct a balanceOf call — always use presets:**
+```
+# WRONG - Do NOT manually specify contract/params, use web3_preset_function_call instead!
+# The preset "erc20_balance" reads token_address and wallet_address from registers automatically.
 ```
 
 **ALWAYS use the preset instead:**

@@ -3,8 +3,6 @@
 //! This tool has a minimal schema (preset + network + call_only) that prevents
 //! the LLM from hallucinating contract addresses, ABIs, or calldata.
 //! All parameters are resolved from registers set by earlier tool calls.
-//!
-//! For custom/manual contract calls, use `web3_function_call` instead.
 
 use super::web3_function_call::{default_abis_dir, execute_resolved_call, resolve_network};
 use crate::tools::presets::{get_web3_preset, list_web3_presets};
@@ -32,7 +30,7 @@ impl Web3PresetFunctionCallTool {
             "preset".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Preset name. Available: weth_deposit, weth_withdraw, weth_balance, erc20_balance, erc20_approve, erc20_allowance, erc20_transfer, swap_execute.".to_string(),
+                description: "Preset name. Available: weth_deposit, weth_withdraw, weth_balance, erc20_balance, erc20_approve_permit2, erc20_allowance_permit2, erc20_transfer, swap_execute.".to_string(),
                 default: None,
                 items: None,
                 enum_values: None,
@@ -66,7 +64,7 @@ impl Web3PresetFunctionCallTool {
         Web3PresetFunctionCallTool {
             definition: ToolDefinition {
                 name: "web3_preset_function_call".to_string(),
-                description: "Execute a preset smart contract call. All parameters are read from registers — just specify the preset name and network. Available presets: weth_deposit, weth_withdraw, weth_balance, erc20_balance, erc20_approve, erc20_allowance, erc20_transfer, swap_execute.".to_string(),
+                description: "Execute a preset smart contract call. All parameters are read from registers — just specify the preset name and network. Available presets: weth_deposit, weth_withdraw, weth_balance, erc20_balance, erc20_approve_permit2, erc20_allowance_permit2, erc20_transfer, swap_execute.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,
@@ -131,7 +129,7 @@ impl Tool for Web3PresetFunctionCallTool {
         };
 
         // Defense-in-depth: In Discord channels, erc20_transfer requires
-        // recipient_address to have been set by discord_resolve_user (not register_set
+        // recipient_address to have been set by discord_resolve_user (not set_address
         // or any other tool). This prevents sending tokens to unverified addresses
         // when discord_resolve_user fails but the AI continues the flow.
         if params.preset == "erc20_transfer" {
@@ -207,6 +205,11 @@ impl Tool for Web3PresetFunctionCallTool {
             }
         }
 
+        // Append static params (not from registers)
+        for static_val in &preset.static_params {
+            resolved_params.push(json!(static_val));
+        }
+
         // Read value from register if specified
         let value = if let Some(ref val_reg) = preset.value_register {
             match context.registers.get(val_reg) {
@@ -258,11 +261,11 @@ mod tests {
             .with_channel(1, "discord".to_string())
             .with_selected_network(Some("base".to_string()));
 
-        // Set recipient_address via register_set (wrong source for Discord)
+        // Set recipient_address via set_address (wrong source for Discord)
         context.set_register(
             "recipient_address",
             json!("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
-            "register_set",
+            "set_address",
         );
 
         let result = tool
@@ -271,7 +274,7 @@ mod tests {
 
         assert!(!result.success);
         assert!(result.content.contains("SAFETY BLOCK"));
-        assert!(result.content.contains("register_set"));
+        assert!(result.content.contains("set_address"));
     }
 
     #[tokio::test]
@@ -326,11 +329,11 @@ mod tests {
             .with_channel(1, "web".to_string())
             .with_selected_network(Some("base".to_string()));
 
-        // Set recipient_address via register_set — should be fine for web
+        // Set recipient_address via set_address — should be fine for web
         context.set_register(
             "recipient_address",
             json!("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
-            "register_set",
+            "set_address",
         );
 
         let result = tool

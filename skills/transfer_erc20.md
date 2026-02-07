@@ -1,12 +1,12 @@
 ---
 name: transfer_erc20
 description: "Transfer (Send) ERC20 tokens on Base/Ethereum using the burner wallet"
-version: 1.2.0
+version: 1.3.0
 author: starkbot
 homepage: https://basescan.org
 metadata: {"requires_auth": false, "clawdbot":{"emoji":"🪙"}}
 tags: [crypto, transfer, send, erc20, tokens, base, wallet]
-requires_tools: [register_set, token_lookup, to_raw_amount, web3_preset_function_call, list_queued_web3_tx, broadcast_web3_tx, select_web3_network]
+requires_tools: [set_address, token_lookup, to_raw_amount, web3_preset_function_call, list_queued_web3_tx, broadcast_web3_tx, select_web3_network]
 ---
 
 # ERC20 Token Transfer/Send Skill
@@ -17,7 +17,7 @@ Transfer or Send ERC20 tokens from the burner wallet to any address.
 >
 > - Use `token_lookup` to get token address and decimals
 > - Use `to_raw_amount` to convert human amounts to raw units
-> - Use `register_set` to set the recipient address
+> - Use `set_address` to set the recipient address (validated)
 > - The `erc20_transfer` preset reads all values from registers — no manual params needed
 
 ## Step 0: Network Selection (If Specified)
@@ -46,7 +46,7 @@ If the user mentions a specific network (e.g., "on polygon", "on mainnet", "on b
 | `token_lookup` | Get token address and decimals |
 | `to_raw_amount` | Convert human amount to raw units safely |
 | `web3_preset_function_call` | Execute ERC20 transfers and check balances via presets |
-| `register_set` | Set recipient address and other registers |
+| `set_address` | Set recipient address (validated) |
 
 **Note:** `wallet_address` is an intrinsic register - always available automatically.
 
@@ -59,7 +59,7 @@ If the user mentions a specific network (e.g., "on polygon", "on mainnet", "on b
 0. `select_web3_network` -> **If user specified a network** (e.g., "on polygon")
 1. `token_lookup` -> Get token address and decimals
 2. `to_raw_amount` -> Convert human amount to raw units (sets `transfer_amount` register)
-3. `register_set` -> Set `recipient_address` register
+3. `set_address` -> Set `recipient_address` register
 4. `web3_preset_function_call` -> Execute the transfer via `erc20_transfer` preset
 
 ---
@@ -93,7 +93,7 @@ This reads `token_address_decimals` automatically and sets:
 ## Step 3: Set recipient address
 
 ```json
-{"tool": "register_set", "key": "recipient_address", "value": "<RECIPIENT_ADDRESS>"}
+{"tool": "set_address", "register": "recipient_address", "address": "<RECIPIENT_ADDRESS>"}
 ```
 
 ---
@@ -123,7 +123,7 @@ cache_as: "transfer_amount"
 ```
 
 ```json
-{"tool": "register_set", "key": "recipient_address", "value": "0x1234567890abcdef1234567890abcdef12345678"}
+{"tool": "set_address", "register": "recipient_address", "address": "0x1234567890abcdef1234567890abcdef12345678"}
 ```
 
 ```tool:web3_preset_function_call
@@ -151,11 +151,12 @@ Broadcast when ready:
 
 ## Check ERC20 Token Balance
 
-First set the token address, then use the erc20_balance preset:
+First look up the token, then use the erc20_balance preset:
 
-```tool:register_set
-key: token_address
-value: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+```tool:token_lookup
+symbol: "USDC"
+network: base
+cache_as: token_address
 ```
 
 ```tool:web3_preset_function_call
@@ -215,15 +216,16 @@ Before executing a transfer:
 | "Transfer amount exceeds balance" | Not enough tokens | Check token balance |
 | "Gas estimation failed" | Invalid recipient or params | Verify addresses |
 | "Transaction reverted" | Contract rejection | Check amounts |
-| "Register not found" | Missing register | Use token_lookup/to_raw_amount/register_set first |
+| "Register not found" | Missing register | Use token_lookup/to_raw_amount/set_address first |
 
 ---
 
 ## Security Notes
 
 1. **Register pattern prevents hallucination** - tx data flows through registers
-2. **to_raw_amount validates amounts** - prevents incorrect decimal conversions
-3. **Always double-check addresses** - Transactions cannot be reversed
-4. **Start with small test amounts** - Verify the flow works first
-5. **Verify token contracts** - Use official addresses from block explorer
-6. **Gas costs** - ETH needed for gas even when sending ERC20s
+2. **set_address validates addresses** - rejects invalid formats and zero address
+3. **to_raw_amount validates amounts** - prevents incorrect decimal conversions
+4. **Always double-check addresses** - Transactions cannot be reversed
+5. **Start with small test amounts** - Verify the flow works first
+6. **Verify token contracts** - Use official addresses from block explorer
+7. **Gas costs** - ETH needed for gas even when sending ERC20s

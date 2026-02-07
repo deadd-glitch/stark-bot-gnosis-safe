@@ -39,7 +39,7 @@ impl DiscordResolveUserTool {
                     Use this when you need to tip or send tokens to a Discord user mentioned \
                     in a message. Returns the user's Discord ID, username, and public address. \
                     On success, automatically sets the 'recipient_address' register — do NOT \
-                    use register_set for recipient_address. \
+                    use set_address for recipient_address. \
                     IMPORTANT: This tool will return an ERROR if the user is not registered - \
                     the tip/transfer MUST be aborted and you should inform the sender that the \
                     recipient needs to run '@starkbot register <address>' first."

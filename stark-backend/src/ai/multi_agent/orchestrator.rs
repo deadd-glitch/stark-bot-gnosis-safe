@@ -107,7 +107,7 @@ impl Orchestrator {
                 You should:\n\
                 1. Use `use_skill` to load relevant skill instructions (e.g., 'local_wallet' for balance queries)\n\
                 2. Use lookup tools like `token_lookup` for token info\n\
-                3. Use `x402_rpc` or `web3_function_call` for blockchain data\n\
+                3. Use `x402_rpc` or `web3_preset_function_call` for blockchain data\n\
                 4. Use `read_file` or `list_files` to explore files\n\n\
                 ❌ Do NOT fabricate, guess, or assume data.\n\
                 ❌ Do NOT respond with made-up balances or addresses.\n\
@@ -370,6 +370,16 @@ impl Orchestrator {
     /// Get a task by ID
     pub fn get_task(&self, task_id: u32) -> Option<&super::types::PlannerTask> {
         self.context.task_queue.get_task(task_id)
+    }
+
+    /// Insert a task right after the current task (will be executed next)
+    pub fn insert_task_front(&mut self, description: String) -> Vec<u32> {
+        self.context.task_queue.insert_after_current(vec![description])
+    }
+
+    /// Append a task at the end of the queue
+    pub fn append_task(&mut self, description: String) -> Vec<u32> {
+        self.context.task_queue.append_tasks(vec![description])
     }
 }
 

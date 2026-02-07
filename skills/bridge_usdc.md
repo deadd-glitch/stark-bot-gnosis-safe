@@ -42,9 +42,10 @@ Bridge USDC between supported chains using Across Protocol's fast bridge (~2 sec
 
 First, verify you have enough USDC on the source chain:
 
-```tool:register_set
-key: token_address
-value: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+```tool:token_lookup
+symbol: "USDC"
+network: base
+cache_as: token_address
 ```
 
 ```tool:web3_preset_function_call

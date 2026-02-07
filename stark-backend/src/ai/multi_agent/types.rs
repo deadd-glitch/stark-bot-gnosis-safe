@@ -148,6 +148,129 @@ impl TaskQueue {
     pub fn get_task(&self, task_id: u32) -> Option<&PlannerTask> {
         self.tasks.iter().find(|t| t.id == task_id)
     }
+
+    /// Insert new tasks right after the current task (before remaining pending tasks).
+    /// Returns the IDs of the newly created tasks.
+    pub fn insert_after_current(&mut self, descriptions: Vec<String>) -> Vec<u32> {
+        let max_id = self.tasks.iter().map(|t| t.id).max().unwrap_or(0);
+        let insert_idx = match self.current_task_idx {
+            Some(idx) => idx + 1,
+            None => 0,
+        };
+
+        let mut new_ids = Vec::new();
+        for (i, desc) in descriptions.iter().enumerate() {
+            let new_id = max_id + (i as u32) + 1;
+            self.tasks.insert(insert_idx + i, PlannerTask::new(new_id, desc.clone()));
+            new_ids.push(new_id);
+        }
+
+        // Adjust current_task_idx: since we inserted AFTER it, it doesn't change.
+        // But if there was no current task, nothing to adjust.
+        new_ids
+    }
+
+    /// Append new tasks at the end of the queue.
+    /// Returns the IDs of the newly created tasks.
+    pub fn append_tasks(&mut self, descriptions: Vec<String>) -> Vec<u32> {
+        let max_id = self.tasks.iter().map(|t| t.id).max().unwrap_or(0);
+        let mut new_ids = Vec::new();
+        for (i, desc) in descriptions.iter().enumerate() {
+            let new_id = max_id + (i as u32) + 1;
+            self.tasks.push(PlannerTask::new(new_id, desc.clone()));
+            new_ids.push(new_id);
+        }
+        new_ids
+    }
+}
+
+#[cfg(test)]
+mod task_queue_tests {
+    use super::*;
+
+    #[test]
+    fn test_insert_after_current() {
+        let mut queue = TaskQueue::from_descriptions(vec![
+            "Task A".to_string(),
+            "Task B".to_string(),
+            "Task C".to_string(),
+        ]);
+
+        // Pop first task (Task A becomes current at idx 0)
+        queue.pop_next();
+        assert_eq!(queue.current_task().unwrap().description, "Task A");
+
+        // Insert two tasks after current
+        let ids = queue.insert_after_current(vec![
+            "Inserted 1".to_string(),
+            "Inserted 2".to_string(),
+        ]);
+        assert_eq!(ids.len(), 2);
+
+        // Queue should be: [Task A (current), Inserted 1, Inserted 2, Task B, Task C]
+        assert_eq!(queue.tasks.len(), 5);
+        assert_eq!(queue.tasks[0].description, "Task A");
+        assert_eq!(queue.tasks[1].description, "Inserted 1");
+        assert_eq!(queue.tasks[2].description, "Inserted 2");
+        assert_eq!(queue.tasks[3].description, "Task B");
+        assert_eq!(queue.tasks[4].description, "Task C");
+
+        // Current task should still be Task A
+        assert_eq!(queue.current_task().unwrap().description, "Task A");
+    }
+
+    #[test]
+    fn test_insert_front_ordering_for_swap() {
+        // Simulates the swap skill: add swap task first, then approval task at front
+        let mut queue = TaskQueue::from_descriptions(vec!["Prepare tokens".to_string()]);
+        queue.pop_next(); // "Prepare tokens" is current
+
+        // Add "Execute swap" at front (after current)
+        queue.insert_after_current(vec!["Execute swap".to_string()]);
+        // Queue: [Prepare tokens (current), Execute swap, ...]
+
+        // Add "Approve tokens" at front (after current, pushing Execute swap further)
+        queue.insert_after_current(vec!["Approve tokens".to_string()]);
+        // Queue: [Prepare tokens (current), Approve tokens, Execute swap]
+
+        assert_eq!(queue.tasks[0].description, "Prepare tokens");
+        assert_eq!(queue.tasks[1].description, "Approve tokens");
+        assert_eq!(queue.tasks[2].description, "Execute swap");
+
+        // Complete current task, pop next — should be "Approve tokens"
+        queue.complete_current();
+        let next = queue.pop_next().unwrap();
+        assert_eq!(next.description, "Approve tokens");
+
+        // Complete approval, pop next — should be "Execute swap"
+        queue.complete_current();
+        let next = queue.pop_next().unwrap();
+        assert_eq!(next.description, "Execute swap");
+    }
+
+    #[test]
+    fn test_append_tasks() {
+        let mut queue = TaskQueue::from_descriptions(vec!["Task A".to_string()]);
+        queue.pop_next();
+
+        let ids = queue.append_tasks(vec!["Task B".to_string(), "Task C".to_string()]);
+        assert_eq!(ids.len(), 2);
+
+        assert_eq!(queue.tasks[0].description, "Task A");
+        assert_eq!(queue.tasks[1].description, "Task B");
+        assert_eq!(queue.tasks[2].description, "Task C");
+    }
+
+    #[test]
+    fn test_insert_with_no_current_task() {
+        let mut queue = TaskQueue::default();
+        assert!(queue.is_empty());
+
+        // Insert when no current task — inserts at position 0
+        let ids = queue.insert_after_current(vec!["New task".to_string()]);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(queue.tasks[0].description, "New task");
+    }
 }
 
 /// The specialized mode/persona of the agent

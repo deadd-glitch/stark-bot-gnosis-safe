@@ -74,7 +74,7 @@ impl SetAgentSubtypeTool {
                  • token_lookup - Get token info and addresses\n\
                  • x402_rpc - RPC calls (get_balance, gas_price, etc.)\n\
                  • x402_fetch - Payment protocol fetch operations\n\
-                 • register_set - Store transaction data safely\n\
+                 • set_address - Set validated recipient addresses\n\
                  • ask_user - Ask user for clarification (e.g., which network)\n\n\
                  ⚠️ IMPORTANT: Call select_web3_network FIRST when:\n\
                  • A skill instructs you to select a specific network\n\

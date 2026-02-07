@@ -1,12 +1,12 @@
 ---
 name: transfer_eth
 description: "Transfer (Send) native ETH on Base/Ethereum using the burner wallet"
-version: 2.2.0
+version: 2.3.0
 author: starkbot
 homepage: https://basescan.org
 metadata: {"requires_auth": false, "clawdbot":{"emoji":"💸"}}
 tags: [crypto, transfer, send, eth, base, wallet]
-requires_tools: [register_set, to_raw_amount, send_eth, list_queued_web3_tx, broadcast_web3_tx, x402_rpc, select_web3_network]
+requires_tools: [set_address, to_raw_amount, send_eth, list_queued_web3_tx, broadcast_web3_tx, x402_rpc, select_web3_network]
 ---
 
 # ETH Transfer/Send Skill
@@ -15,11 +15,11 @@ Transfer or Send native ETH from the burner wallet to any address.
 
 > **IMPORTANT: This skill uses the REGISTER PATTERN to prevent hallucination of transaction data.**
 >
-> - Use `register_set` to set `send_to` (recipient address)
+> - Use `set_address` to set `send_to` (recipient address) — validates address format
 > - Use `to_raw_amount` with `decimals: 18` to set `amount_raw` (wei value)
 > - The `send_eth` tool reads from these registers - you NEVER pass raw tx params directly
 
-## 🚨 Step 0: Network Selection (If Specified)
+## Step 0: Network Selection (If Specified)
 
 **Before ANY transfer operation, check if the user specified a network in their query.**
 
@@ -30,9 +30,9 @@ If the user mentions a specific network (e.g., "on polygon", "on mainnet", "on b
 ```
 
 **Examples of network detection:**
-- "send 0.1 ETH **on polygon**" → `{"tool": "select_web3_network", "network": "polygon"}`
-- "transfer 0.01 ETH **on mainnet**" → `{"tool": "select_web3_network", "network": "mainnet"}`
-- "send ETH **on arbitrum**" → `{"tool": "select_web3_network", "network": "arbitrum"}`
+- "send 0.1 ETH **on polygon**" -> `{"tool": "select_web3_network", "network": "polygon"}`
+- "transfer 0.01 ETH **on mainnet**" -> `{"tool": "select_web3_network", "network": "mainnet"}`
+- "send ETH **on arbitrum**" -> `{"tool": "select_web3_network", "network": "arbitrum"}`
 
 **If no network is specified**, proceed with the current/default network (usually base).
 
@@ -43,7 +43,7 @@ If the user mentions a specific network (e.g., "on polygon", "on mainnet", "on b
 | Tool | Purpose |
 |------|---------|
 | `x402_rpc` | Get gas price and ETH balance (get_balance preset) |
-| `register_set` | Set the recipient address (`send_to` register) |
+| `set_address` | Set the recipient address (`send_to` register) — validates format |
 | `to_raw_amount` | Convert human ETH amount to wei (`amount_raw` register) |
 | `send_eth` | Execute native ETH transfers (reads from registers) |
 
@@ -55,18 +55,17 @@ If the user mentions a specific network (e.g., "on polygon", "on mainnet", "on b
 
 **ALWAYS follow this sequence for ETH transfers:**
 
-0. `select_web3_network` → **If user specified a network** (e.g., "on polygon")
-1. `register_set` → Set `send_to` (recipient address)
-2. `to_raw_amount` → Convert human amount to wei (sets `amount_raw`)
-3. `send_eth` → Execute the transfer (reads from registers)
+0. `select_web3_network` -> **If user specified a network** (e.g., "on polygon")
+1. `set_address` -> Set `send_to` (recipient address)
+2. `to_raw_amount` -> Convert human amount to wei (sets `amount_raw`)
+3. `send_eth` -> Execute the transfer (reads from registers)
 
 ---
 
 ## Step 1: Set the recipient address
 
-```tool:register_set
-key: send_to
-value: "0x1234567890abcdef1234567890abcdef12345678"
+```json
+{"tool": "set_address", "register": "send_to", "address": "0x1234567890abcdef1234567890abcdef12345678"}
 ```
 
 ---
@@ -81,7 +80,7 @@ decimals: 18
 cache_as: amount_raw
 ```
 
-This converts 0.01 ETH → "10000000000000000" wei
+This converts 0.01 ETH -> "10000000000000000" wei
 
 ---
 
@@ -114,9 +113,8 @@ Broadcast when ready:
 
 ### 1. Set recipient address
 
-```tool:register_set
-key: send_to
-value: "0x1234567890abcdef1234567890abcdef12345678"
+```json
+{"tool": "set_address", "register": "send_to", "address": "0x1234567890abcdef1234567890abcdef12345678"}
 ```
 
 ### 2. Convert amount to wei
@@ -170,10 +168,6 @@ The result is hex wei - convert to ETH by dividing by 10^18.
 
 ## CRITICAL RULES
 
-### You CANNOT use register_set for these registers:
-- `amount_raw` - use `to_raw_amount` with `decimals: 18`
-- `transfer_data` / `transfer_tx` - use individual registers instead
-
 ### Always use to_raw_amount for amounts!
 **This prevents incorrect amounts from being sent.** The `to_raw_amount` tool:
 1. Validates the human amount is a valid number
@@ -200,17 +194,16 @@ Before executing a transfer:
 | "Insufficient funds" | Not enough ETH for gas + value | Add ETH to wallet |
 | "Gas estimation failed" | Invalid recipient or params | Verify addresses |
 | "Transaction reverted" | Should not happen for simple ETH transfer | Check recipient is not a contract that rejects ETH |
-| "Register 'send_to' not found" | Missing recipient | Use register_set first |
+| "Register 'send_to' not found" | Missing recipient | Use set_address first |
 | "Register 'amount_raw' not found" | Missing amount | Use to_raw_amount first |
-| "Cannot set 'amount_raw'" | Tried to use register_set | Use to_raw_amount instead |
 
 ---
 
 ## Security Notes
 
 1. **Register pattern prevents hallucination** - tx data flows through validated registers
-2. **to_raw_amount validates amounts** - prevents incorrect decimal conversions
-3. **amount_raw is protected** - cannot be set directly via register_set
+2. **set_address validates addresses** - rejects invalid formats and zero address
+3. **to_raw_amount validates amounts** - prevents incorrect decimal conversions
 4. **Always double-check addresses** - Transactions cannot be reversed
 5. **Start with small test amounts** - Verify the flow works first
 6. **Gas costs** - ETH needed for gas (21000 gas for simple transfer)

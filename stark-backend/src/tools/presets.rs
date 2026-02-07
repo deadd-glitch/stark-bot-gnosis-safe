@@ -219,7 +219,14 @@ pub fn list_rpc_presets() -> Vec<String> {
 pub fn list_web3_presets() -> Vec<String> {
     WEB3_PRESETS.get()
         .map(|p| p.keys().cloned().collect())
-        .unwrap_or_else(|| vec!["weth_deposit".to_string(), "weth_withdraw".to_string()])
+        .unwrap_or_else(|| vec![
+            "weth_deposit".to_string(),
+            "weth_withdraw".to_string(),
+            "erc20_approve_permit2".to_string(),
+            "erc20_allowance_permit2".to_string(),
+            "erc20_balance".to_string(),
+            "erc20_transfer".to_string(),
+        ])
 }
 
 /// List available network names
@@ -305,6 +312,44 @@ fn default_web3_presets() -> HashMap<String, Web3Preset> {
         value_register: None,
         static_params: vec![],
         description: "Unwrap WETH to ETH".to_string(),
+    });
+
+    map.insert("erc20_approve_permit2".to_string(), Web3Preset {
+        abi: "erc20".to_string(),
+        contracts: HashMap::new(),
+        contract_register: Some("sell_token".to_string()),
+        function: "approve".to_string(),
+        params_registers: vec![],
+        value_register: None,
+        static_params: vec![
+            "0x000000000022D473030F116dDEE9F6B43aC78BA3".to_string(), // Permit2 address
+            "115792089237316195423570985008687907853269984665640564039457584007913129639935".to_string(), // max uint256
+        ],
+        description: "Approve Permit2 to spend the sell token (max approval). Reads contract from sell_token register.".to_string(),
+    });
+
+    map.insert("erc20_allowance_permit2".to_string(), Web3Preset {
+        abi: "erc20".to_string(),
+        contracts: HashMap::new(),
+        contract_register: Some("sell_token".to_string()),
+        function: "allowance".to_string(),
+        params_registers: vec!["wallet_address".to_string()],
+        value_register: None,
+        static_params: vec![
+            "0x000000000022D473030F116dDEE9F6B43aC78BA3".to_string(), // Permit2 address
+        ],
+        description: "Check Permit2 allowance for the sell token. Reads contract from sell_token register.".to_string(),
+    });
+
+    map.insert("erc20_balance".to_string(), Web3Preset {
+        abi: "erc20".to_string(),
+        contracts: HashMap::new(),
+        contract_register: Some("token_address".to_string()),
+        function: "balanceOf".to_string(),
+        params_registers: vec!["wallet_address".to_string()],
+        value_register: None,
+        static_params: vec![],
+        description: "Get ERC20 token balance. Set token_address register first.".to_string(),
     });
 
     map.insert("erc20_transfer".to_string(), Web3Preset {
