@@ -36,14 +36,15 @@ export default function AgentSettings() {
   }, []);
 
   const loadPresets = async () => {
+    let loadedPresets: AiEndpointPreset[] = [];
     try {
-      const data = await getAiEndpointPresets();
-      setPresets(data);
+      loadedPresets = await getAiEndpointPresets();
+      setPresets(loadedPresets);
     } catch (err) {
       console.error('Failed to load AI endpoint presets:', err);
     } finally {
-      // Load settings after presets so we can match against them
-      loadSettings();
+      // Pass presets directly since setPresets hasn't applied yet
+      loadSettings(loadedPresets);
     }
   };
 
@@ -58,19 +59,19 @@ export default function AgentSettings() {
   // Archetype is only selectable for custom endpoints
   const isArchetypeLocked = endpointOption !== 'custom';
 
-  const loadSettings = async () => {
+  const loadSettings = async (loadedPresets: AiEndpointPreset[]) => {
     try {
       const data = await getAgentSettings() as Settings;
 
       // Determine which endpoint option is being used
-      const matchedPreset = presets.find(p => p.endpoint === data.endpoint);
+      const matchedPreset = loadedPresets.find(p => p.endpoint === data.endpoint);
       if (matchedPreset) {
         setEndpointOption(matchedPreset.id);
       } else if (data.endpoint) {
         setEndpointOption('custom');
         setCustomEndpoint(data.endpoint);
       } else {
-        setEndpointOption(presets.length > 0 ? presets[0].id : 'custom');
+        setEndpointOption(loadedPresets.length > 0 ? loadedPresets[0].id : 'custom');
       }
 
       // Set secret key indicator
