@@ -30,6 +30,7 @@ mod hooks;
 mod tool_validators;
 mod tx_queue;
 mod keystore_client;
+mod identity_client;
 
 use channels::{ChannelManager, MessageDispatcher, SafeModeChannelRateLimiter};
 use tx_queue::TxQueueManager;
@@ -515,6 +516,22 @@ async fn restore_backup_data(
             match std::fs::write(&soul_path, soul_content) {
                 Ok(_) => log::info!("[Keystore] Restored soul document from backup"),
                 Err(e) => log::warn!("[Keystore] Failed to restore soul document: {}", e),
+            }
+        }
+    }
+
+    // Restore identity document (IDENTITY.json) from backup if not already present
+    if let Some(identity_content) = &backup_data.identity_document {
+        let identity_path = config::identity_document_path();
+        if identity_path.exists() {
+            log::info!("[Keystore] Identity document already exists locally, skipping restore from backup");
+        } else {
+            if let Some(parent) = identity_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match std::fs::write(&identity_path, identity_content) {
+                Ok(_) => log::info!("[Keystore] Restored identity document from backup"),
+                Err(e) => log::warn!("[Keystore] Failed to restore identity document: {}", e),
             }
         }
     }

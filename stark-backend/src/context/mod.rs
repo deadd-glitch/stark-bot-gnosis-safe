@@ -399,8 +399,21 @@ impl ContextManager {
         log::info!("[PRE_FLUSH] Starting memory flush for session {} ({} messages)",
             session_id, messages_to_compact.len());
 
+        // Filter out messages from memory-excluded tools (e.g. install_api_key)
+        // so secrets never leak into memory markdown files
+        let messages_filtered: Vec<&SessionMessage> = messages_to_compact.iter()
+            .filter(|m| {
+                if m.role == DbMessageRole::ToolCall || m.role == DbMessageRole::ToolResult {
+                    !crate::tools::types::MEMORY_EXCLUDE_TOOL_LIST.iter()
+                        .any(|t| m.content.contains(&format!("`{}`", t)))
+                } else {
+                    true
+                }
+            })
+            .collect();
+
         // Build conversation text
-        let conversation_text = messages_to_compact.iter()
+        let conversation_text = messages_filtered.iter()
             .map(|m| {
                 let role = match m.role {
                     DbMessageRole::User => "User",

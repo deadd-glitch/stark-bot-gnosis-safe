@@ -52,6 +52,7 @@ fn intrinsic_path(name: &str) -> Option<PathBuf> {
     match name {
         "soul.md" => Some(crate::config::soul_document_path()),
         "guidelines.md" => Some(crate::config::guidelines_document_path()),
+        "identity.json" => Some(crate::config::identity_document_path()),
         "assistant.md" => Some(crate::config::backend_dir().join("src/ai/multi_agent/prompts/assistant.md")),
         _ => None,
     }
@@ -67,6 +68,11 @@ const INTRINSIC_FILES: &[IntrinsicFile] = &[
     IntrinsicFile {
         name: "guidelines.md",
         description: "Operational and business guidelines",
+        writable: true,
+    },
+    IntrinsicFile {
+        name: "identity.json",
+        description: "Agent EIP-8004 identity registration file",
         writable: true,
     },
     IntrinsicFile {

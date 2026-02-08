@@ -1471,6 +1471,7 @@ impl MessageDispatcher {
         let mut iterations = 0;
         let mut tool_call_log: Vec<String> = Vec::new();
         let mut orchestrator_complete = false;
+        let mut memory_suppressed = false;
         let mut final_summary = String::new();
         let mut waiting_for_user_response = false;
         let mut user_question_content = String::new();
@@ -2029,6 +2030,10 @@ impl MessageDispatcher {
                     args_pretty
                 ));
 
+                if crate::tools::types::is_memory_excluded_tool(&call.name) {
+                    memory_suppressed = true;
+                }
+
                 self.broadcaster.broadcast(GatewayEvent::agent_tool_call(
                     original_message.channel_id,
                     Some(&original_message.chat_id),
@@ -2571,11 +2576,15 @@ impl MessageDispatcher {
                 log::error!("[ORCHESTRATED_LOOP] Failed to update session completion status: {}", e);
             }
             self.broadcast_session_complete(original_message.channel_id, session_id);
-            self.save_session_completion_memory(
-                &original_message.text,
-                &last_say_to_user_content,
-                is_safe_mode,
-            );
+            if memory_suppressed {
+                log::info!("[ORCHESTRATED_LOOP] Skipping session memory — memory-excluded tool was called");
+            } else {
+                self.save_session_completion_memory(
+                    &original_message.text,
+                    &last_say_to_user_content,
+                    is_safe_mode,
+                );
+            }
         }
         // Note: If waiting_for_user_response, session stays Active (correct behavior)
         // Note: If max iterations hit without completion, session stays Active for potential retry
@@ -2702,6 +2711,7 @@ impl MessageDispatcher {
         let mut iterations = 0;
         let mut tool_call_log: Vec<String> = Vec::new();
         let mut orchestrator_complete = false;
+        let mut memory_suppressed = false;
         let mut waiting_for_user_response = false;
         let mut user_question_content = String::new();
         let mut was_cancelled = false;
@@ -2919,6 +2929,10 @@ impl MessageDispatcher {
                             tool_call.tool_name,
                             args_pretty
                         ));
+
+                        if crate::tools::types::is_memory_excluded_tool(&tool_call.tool_name) {
+                            memory_suppressed = true;
+                        }
 
                         self.broadcaster.broadcast(GatewayEvent::agent_tool_call(
                             original_message.channel_id,
@@ -3449,11 +3463,15 @@ impl MessageDispatcher {
                 log::error!("[TEXT_ORCHESTRATED] Failed to update session completion status: {}", e);
             }
             self.broadcast_session_complete(original_message.channel_id, session_id);
-            self.save_session_completion_memory(
-                &original_message.text,
-                &last_say_to_user_content,
-                is_safe_mode,
-            );
+            if memory_suppressed {
+                log::info!("[TEXT_ORCHESTRATED] Skipping session memory — memory-excluded tool was called");
+            } else {
+                self.save_session_completion_memory(
+                    &original_message.text,
+                    &last_say_to_user_content,
+                    is_safe_mode,
+                );
+            }
         }
         // Note: If waiting_for_user_response, session stays Active (correct behavior)
         // Note: If max iterations hit without completion, session stays Active for potential retry
@@ -3695,6 +3713,19 @@ impl MessageDispatcher {
         if let Some(guidelines) = Self::load_guidelines() {
             prompt.push_str(&guidelines);
             prompt.push_str("\n\n");
+        }
+
+        // Load IDENTITY.json summary if available
+        if let Ok(identity_json) = std::fs::read_to_string(crate::config::identity_document_path()) {
+            if let Ok(reg) = serde_json::from_str::<crate::eip8004::types::RegistrationFile>(&identity_json) {
+                prompt.push_str(&format!(
+                    "## Agent Identity (EIP-8004)\nRegistered as: {} — {}. Services: [{}]. x402 support: {}.\n\n",
+                    reg.name,
+                    reg.description,
+                    if reg.services.is_empty() { "none".to_string() } else { reg.services.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ") },
+                    if reg.x402_support { "enabled" } else { "disabled" }
+                ));
+            }
         }
 
         // QMD Memory System: Read from markdown files
@@ -4058,8 +4089,19 @@ impl MessageDispatcher {
                 // Save session memory before reset (session memory hook)
                 let message_count = self.db.count_session_messages(session.id).unwrap_or(0);
                 if message_count >= 2 {
-                    // Only save if there are meaningful messages
-                    if let Ok(Some(settings)) = self.db.get_active_agent_settings() {
+                    // Check if any memory-excluded tools were used in this session
+                    let has_excluded_tools = self.db.get_recent_session_messages(session.id, 50)
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|m| {
+                            m.role == crate::models::session_message::MessageRole::ToolCall
+                                && crate::tools::types::MEMORY_EXCLUDE_TOOL_LIST.iter()
+                                    .any(|t| m.content.contains(&format!("`{}`", t)))
+                        });
+
+                    if has_excluded_tools {
+                        log::info!("[SESSION_MEMORY] Skipping session memory — memory-excluded tool was called");
+                    } else if let Ok(Some(settings)) = self.db.get_active_agent_settings() {
                         if let Ok(client) = AiClient::from_settings(&settings) {
                             match context::save_session_memory(
                                 &self.db,

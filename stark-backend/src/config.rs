@@ -208,6 +208,11 @@ pub fn soul_document_path() -> PathBuf {
     PathBuf::from(soul_dir()).join("SOUL.md")
 }
 
+/// Get the path to IDENTITY.json in the soul directory
+pub fn identity_document_path() -> PathBuf {
+    PathBuf::from(soul_dir()).join("IDENTITY.json")
+}
+
 /// Get the path to GUIDELINES.md in the soul directory
 pub fn guidelines_document_path() -> PathBuf {
     PathBuf::from(soul_dir()).join("GUIDELINES.md")

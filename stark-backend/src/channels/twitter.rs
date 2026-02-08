@@ -1409,16 +1409,27 @@ mod tests {
             ),
         };
 
-        // Reply to bot with only auto-prepended mention → implicit, should skip
+        // Reply to bot with only auto-prepended mention (no real text) → implicit, should skip
         let implicit = Tweet {
             id: "1".to_string(),
-            text: "@starkbot thanks for the info!".to_string(),
+            text: "@starkbot".to_string(),
             author_id: "200".to_string(),
             conversation_id: Some("50".to_string()),
             in_reply_to_user_id: Some("999".to_string()),
             referenced_tweets: None,
         };
         assert!(is_implicit_reply_to_bot(&implicit, &config, &re));
+
+        // Reply to bot with auto-prepended mention + real text → NOT implicit, should process
+        let reply_with_text = Tweet {
+            id: "1b".to_string(),
+            text: "@starkbot thanks for the info!".to_string(),
+            author_id: "200".to_string(),
+            conversation_id: Some("50".to_string()),
+            in_reply_to_user_id: Some("999".to_string()),
+            referenced_tweets: None,
+        };
+        assert!(!is_implicit_reply_to_bot(&reply_with_text, &config, &re));
 
         // Reply to bot with explicit @starkbot in body → NOT implicit, should process
         let explicit = Tweet {
@@ -1453,8 +1464,8 @@ mod tests {
         };
         assert!(!is_implicit_reply_to_bot(&direct, &config, &re));
 
-        // Reply to bot in thread with multiple auto-prepended mentions, no explicit bot mention
-        let thread_reply = Tweet {
+        // Reply to bot in thread with multiple auto-prepended mentions but real text → NOT implicit
+        let thread_reply_with_text = Tweet {
             id: "5".to_string(),
             text: "@starkbot @alice I agree with alice".to_string(),
             author_id: "200".to_string(),
@@ -1462,7 +1473,18 @@ mod tests {
             in_reply_to_user_id: Some("999".to_string()),
             referenced_tweets: None,
         };
-        assert!(is_implicit_reply_to_bot(&thread_reply, &config, &re));
+        assert!(!is_implicit_reply_to_bot(&thread_reply_with_text, &config, &re));
+
+        // Reply to bot in thread with only auto-prepended mentions, no real text → implicit
+        let thread_reply_mentions_only = Tweet {
+            id: "5b".to_string(),
+            text: "@starkbot @alice".to_string(),
+            author_id: "200".to_string(),
+            conversation_id: Some("50".to_string()),
+            in_reply_to_user_id: Some("999".to_string()),
+            referenced_tweets: None,
+        };
+        assert!(is_implicit_reply_to_bot(&thread_reply_mentions_only, &config, &re));
     }
 
     #[test]

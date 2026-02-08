@@ -744,6 +744,17 @@ pub const SAFE_MODE_ALLOW_LIST: &[&str] = &[
     "telegram_read",        // Read-only Telegram operations (safe)
 ];
 
+/// Tools whose sessions must NEVER be written to memory files.
+/// SECURITY: Prevents API keys and secrets from persisting in memory markdown files.
+pub const MEMORY_EXCLUDE_TOOL_LIST: &[&str] = &[
+    "install_api_key",
+    "api_keys_check",
+];
+
+pub fn is_memory_excluded_tool(tool_name: &str) -> bool {
+    MEMORY_EXCLUDE_TOOL_LIST.contains(&tool_name)
+}
+
 impl ToolConfig {
     /// Create a safe mode tool config.
     /// This is the ONLY way to create a safe mode config - enforced at the type level.

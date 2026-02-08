@@ -53,6 +53,9 @@ pub struct BackupData {
     /// Soul document content (SOUL.md - agent's personality and truths)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub soul_document: Option<String>,
+    /// Identity document content (IDENTITY.json - EIP-8004 agent identity registration)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_document: Option<String>,
     /// Discord user registrations (discord_user_id → public_address mappings)
     pub discord_registrations: Vec<DiscordRegistrationEntry>,
     /// Skills (custom agent skills)
@@ -78,6 +81,7 @@ impl Default for BackupData {
             channel_settings: Vec::new(),
             channels: Vec::new(),
             soul_document: None,
+            identity_document: None,
             discord_registrations: Vec::new(),
             skills: Vec::new(),
             agent_settings: Vec::new(),
@@ -108,6 +112,7 @@ impl BackupData {
             + self.channel_settings.len()
             + self.channels.len()
             + if self.soul_document.is_some() { 1 } else { 0 }
+            + if self.identity_document.is_some() { 1 } else { 0 }
             + self.discord_registrations.len()
             + self.skills.len()
             + self.agent_settings.len()

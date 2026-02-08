@@ -326,6 +326,8 @@ pub struct BackupResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_soul: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_identity: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -366,6 +368,8 @@ pub struct PreviewKeysResponse {
     pub has_heartbeat: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_soul: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_identity: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup_version: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -618,6 +622,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: Some("Burner wallet not configured".to_string()),
             });
@@ -645,6 +650,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                     has_settings: None,
                     has_heartbeat: None,
                     has_soul: None,
+                has_identity: None,
                     message: None,
                     error: Some("Failed to derive wallet address".to_string()),
                 });
@@ -674,6 +680,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: Some("Failed to export API keys".to_string()),
             });
@@ -851,6 +858,18 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
         }
     }
 
+    // Get identity document content
+    let identity_path = crate::config::identity_document_path();
+    match std::fs::read_to_string(&identity_path) {
+        Ok(content) => {
+            backup.identity_document = Some(content);
+            log::info!("Including identity document in backup");
+        }
+        Err(e) => {
+            log::debug!("Identity document not found for backup: {}", e);
+        }
+    }
+
     // Get discord registrations
     match crate::discord_hooks::db::list_registered_profiles(&state.db) {
         Ok(profiles) => {
@@ -930,7 +949,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
     }
 
     // Check if there's anything to backup
-    if backup.api_keys.is_empty() && backup.mind_map_nodes.is_empty() && backup.cron_jobs.is_empty() && backup.bot_settings.is_none() && backup.heartbeat_config.is_none() && backup.channel_settings.is_empty() && backup.channels.is_empty() && backup.soul_document.is_none() && backup.discord_registrations.is_empty() && backup.skills.is_empty() && backup.agent_settings.is_empty() {
+    if backup.api_keys.is_empty() && backup.mind_map_nodes.is_empty() && backup.cron_jobs.is_empty() && backup.bot_settings.is_none() && backup.heartbeat_config.is_none() && backup.channel_settings.is_empty() && backup.channels.is_empty() && backup.soul_document.is_none() && backup.identity_document.is_none() && backup.discord_registrations.is_empty() && backup.skills.is_empty() && backup.agent_settings.is_empty() {
         return HttpResponse::BadRequest().json(BackupResponse {
             success: false,
             key_count: None,
@@ -945,6 +964,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
             has_settings: None,
             has_heartbeat: None,
             has_soul: None,
+            has_identity: None,
             message: None,
             error: Some("No data to backup".to_string()),
         });
@@ -983,6 +1003,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: Some("Failed to serialize backup".to_string()),
             });
@@ -1008,6 +1029,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: Some("Failed to encrypt backup".to_string()),
             });
@@ -1029,6 +1051,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
             }
 
             let has_soul = backup.soul_document.is_some();
+            let has_identity = backup.identity_document.is_some();
             HttpResponse::Ok().json(BackupResponse {
                 success: true,
                 key_count: Some(key_count),
@@ -1043,8 +1066,9 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 has_settings: Some(has_settings),
                 has_heartbeat: Some(has_heartbeat),
                 has_soul: Some(has_soul),
+                has_identity: Some(has_identity),
                 message: Some(format!(
-                    "Backed up {} items ({} keys, {} nodes, {} connections, {} cron jobs, {} channels, {} channel settings, {} discord registrations, {} skills, {} AI models{}{}{})",
+                    "Backed up {} items ({} keys, {} nodes, {} connections, {} cron jobs, {} channels, {} channel settings, {} discord registrations, {} skills, {} AI models{}{}{}{})",
                     item_count,
                     key_count,
                     node_count,
@@ -1057,7 +1081,8 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                     agent_settings_count,
                     if has_settings { ", settings" } else { "" },
                     if has_heartbeat { ", heartbeat" } else { "" },
-                    if has_soul { ", soul" } else { "" }
+                    if has_soul { ", soul" } else { "" },
+                    if has_identity { ", identity" } else { "" }
                 )),
                 error: None,
             })
@@ -1078,6 +1103,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: resp.error.or(Some("Failed to upload to keystore".to_string())),
             })
@@ -1098,6 +1124,7 @@ async fn backup_to_cloud(state: web::Data<AppState>, req: HttpRequest) -> impl R
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: Some(format!("Keystore error: {}", e)),
             })
@@ -1129,6 +1156,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: Some("Burner wallet not configured".to_string()),
             });
@@ -1160,6 +1188,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: Some(format!("Keystore error: {}", e)),
             });
@@ -1183,6 +1212,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: Some(error),
             });
@@ -1201,6 +1231,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             has_settings: None,
             has_heartbeat: None,
             has_soul: None,
+            has_identity: None,
             message: None,
             error: Some(error),
         });
@@ -1223,6 +1254,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: Some("No encrypted data in response".to_string()),
             });
@@ -1248,6 +1280,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 message: None,
                 error: Some("Failed to decrypt backup (wrong wallet?)".to_string()),
             });
@@ -1277,6 +1310,7 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
                         has_settings: None,
                         has_heartbeat: None,
                         has_soul: None,
+                        has_identity: None,
                         message: None,
                         error: Some("Invalid backup data format".to_string()),
                     });
@@ -1576,6 +1610,29 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
         }
     }
 
+    // Restore identity document if present in backup AND no local copy exists
+    let mut has_identity = false;
+    if let Some(identity_content) = &backup_data.identity_document {
+        let identity_path = crate::config::identity_document_path();
+        if identity_path.exists() {
+            has_identity = true;
+            log::info!("[Keystore] Identity document already exists locally, skipping restore from backup");
+        } else {
+            if let Some(parent) = identity_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match std::fs::write(&identity_path, identity_content) {
+                Ok(_) => {
+                    has_identity = true;
+                    log::info!("[Keystore] Restored identity document from backup");
+                }
+                Err(e) => {
+                    log::warn!("[Keystore] Failed to restore identity document: {}", e);
+                }
+            }
+        }
+    }
+
     // Restore discord registrations
     let mut restored_discord_registrations = 0;
     if !backup_data.discord_registrations.is_empty() {
@@ -1737,8 +1794,9 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
         has_settings: Some(has_settings),
         has_heartbeat: Some(has_heartbeat),
         has_soul: Some(has_soul),
+        has_identity: Some(has_identity),
         message: Some(format!(
-            "Restored {} keys, {} nodes, {} connections, {} cron jobs, {} channels, {} channel settings, {} discord registrations, {} skills, {} AI models{}{}{}",
+            "Restored {} keys, {} nodes, {} connections, {} cron jobs, {} channels, {} channel settings, {} discord registrations, {} skills, {} AI models{}{}{}{}",
             restored_keys,
             restored_nodes,
             restored_connections,
@@ -1750,7 +1808,8 @@ async fn restore_from_cloud(state: web::Data<AppState>, req: HttpRequest) -> imp
             restored_agent_settings,
             if has_settings { ", settings" } else { "" },
             if has_heartbeat { ", heartbeat" } else { "" },
-            if has_soul { ", soul" } else { "" }
+            if has_soul { ", soul" } else { "" },
+            if has_identity { ", identity" } else { "" }
         )),
         error: None,
     })
@@ -1832,6 +1891,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 backup_version: None,
                 message: None,
                 error: Some("Burner wallet not configured".to_string()),
@@ -1865,6 +1925,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 backup_version: None,
                 message: None,
                 error: Some(format!("Keystore error: {}", e)),
@@ -1890,6 +1951,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 backup_version: None,
                 message: None,
                 error: Some(error),
@@ -1910,6 +1972,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
             has_settings: None,
             has_heartbeat: None,
             has_soul: None,
+            has_identity: None,
             backup_version: None,
             message: None,
             error: Some(error),
@@ -1934,6 +1997,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 backup_version: None,
                 message: None,
                 error: Some("No encrypted data in response".to_string()),
@@ -1961,6 +2025,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 backup_version: None,
                 message: None,
                 error: Some("Failed to decrypt backup (wrong wallet?)".to_string()),
@@ -1999,6 +2064,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
             has_settings: Some(backup_data.bot_settings.is_some()),
             has_heartbeat: Some(backup_data.heartbeat_config.is_some()),
             has_soul: Some(backup_data.soul_document.is_some()),
+            has_identity: Some(backup_data.identity_document.is_some()),
             backup_version: Some(backup_data.version),
             message: Some("Cloud backup retrieved successfully".to_string()),
             error: None,
@@ -2025,6 +2091,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
                 has_settings: None,
                 has_heartbeat: None,
                 has_soul: None,
+                has_identity: None,
                 backup_version: None,
                 message: None,
                 error: Some("Invalid backup data format".to_string()),
@@ -2056,6 +2123,7 @@ async fn preview_cloud_keys(state: web::Data<AppState>, req: HttpRequest) -> imp
         has_settings: None,
         has_heartbeat: None,
         has_soul: None,
+        has_identity: None,
         backup_version: None,
         message: Some("Cloud keys retrieved successfully (legacy format)".to_string()),
         error: None,
