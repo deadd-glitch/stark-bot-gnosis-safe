@@ -741,7 +741,7 @@ async fn swap_flow_realistic() {
         chat_id: "test-chat".to_string(),
         user_id: "test-user".to_string(),
         user_name: "TestUser".to_string(),
-        text: "swap 1 usdc to degen on base".to_string(),
+        text: "swap 1 usdc to starkbot".to_string(),
         message_id: None,
         session_mode: None,
         selected_network: None,
