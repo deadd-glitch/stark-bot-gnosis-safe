@@ -39,7 +39,7 @@ Call `define_tasks` with all 4 tasks in order:
 
 ## Task 1: Prepare — resolve mention, look up token, check balances
 
-### 1a. Resolve Discord mention
+### 1. Resolve Discord mention
 
 Extract the Discord user ID from the mention and resolve it to a wallet address:
 
@@ -52,7 +52,7 @@ Extract the Discord user ID from the mention and resolve it to a wallet address:
 - If `registered: true` → proceed (the `recipient_address` register is automatically set)
 - If error/not registered → tell user they need to register with `@starkbot register 0x...` and stop
 
-### 1b. Look up the token
+### 2. Look up the token
 
 ```json
 {"tool": "token_lookup", "symbol": "<TOKEN>", "network": "base", "cache_as": "token_address"}
@@ -60,7 +60,7 @@ Extract the Discord user ID from the mention and resolve it to a wallet address:
 
 This sets registers: `token_address` and `token_address_decimals`.
 
-### 1c. Check token balance
+### 3. Check token balance
 
 ```json
 {"tool": "web3_preset_function_call", "preset": "erc20_balance", "network": "base", "call_only": true}
@@ -68,7 +68,7 @@ This sets registers: `token_address` and `token_address_decimals`.
 
 Verify the sender has enough tokens for the tip. If insufficient, tell the user and stop.
 
-### 1d. Report findings and complete
+### 4. Report findings and complete
 
 Tell the user what you found (recipient, token, balance) using `say_to_user` with `finished_task: true`:
 
@@ -82,7 +82,7 @@ Tell the user what you found (recipient, token, balance) using `say_to_user` wit
 
 ## Task 2: Convert amount to raw units
 
-### 2a. Convert amount
+### 1. Convert amount
 
 ```json
 {"tool": "to_raw_amount", "amount": "<human_amount>", "cache_as": "transfer_amount"}
@@ -101,7 +101,7 @@ After success:
 
 **Exactly 2 tool calls, SEQUENTIALLY (one at a time, NOT in parallel):**
 
-### 3a. Create the transfer transaction (FIRST call)
+### 1. Create the transfer transaction (FIRST call)
 
 ```json
 {"tool": "web3_preset_function_call", "preset": "erc20_transfer", "network": "base"}
@@ -111,10 +111,10 @@ The `erc20_transfer` preset reads `token_address`, `recipient_address`, and `tra
 
 Wait for the result. Extract the `uuid` from the response.
 
-### 3b. Broadcast it (SECOND call — after 3a succeeds)
+### 2. Broadcast it (SECOND call — after step 1 succeeds)
 
 ```json
-{"tool": "broadcast_web3_tx", "uuid": "<uuid_from_3a>"}
+{"tool": "broadcast_web3_tx", "uuid": "<uuid_from_step_1>"}
 ```
 
 After broadcast succeeds:
