@@ -1,110 +1,142 @@
 ---
 name: discord_tipping
 description: "Tip Discord users with tokens. Resolves Discord mentions to wallet addresses and executes ERC20 transfers."
-version: 1.3.0
+version: 2.0.0
 author: starkbot
 metadata: {"clawdbot":{"emoji":"💸"}}
 tags: [discord, tipping, crypto, transfer, erc20]
-requires_tools: [discord_resolve_user, token_lookup, to_raw_amount, web3_preset_function_call, list_queued_web3_tx, broadcast_web3_tx]
+requires_tools: [discord_resolve_user, token_lookup, to_raw_amount, web3_preset_function_call, list_queued_web3_tx, broadcast_web3_tx, verify_tx_broadcast, define_tasks]
 ---
 
 # Discord Tipping
 
 Send tokens to Discord users by resolving their mention to a registered wallet address.
 
-## Quick Start
-
-When a user says "tip @someone X TOKEN", follow these 4 steps in order:
-
-1. **Resolve the mention** -> Get wallet address (recipient_address register is automatically set)
-2. **Look up the token** -> Get contract address and decimals
-3. **Convert amount** -> Human readable to raw units
-4. **Transfer** -> Execute the ERC20 transfer via preset
-
 **Amount shorthand:** Users can use "k" for thousands (1k = 1,000) and "m" for millions (1m = 1,000,000). For example: "tip @user 5k STARKBOT" means 5,000 tokens.
 
-## Step 1: Resolve Discord Mention
+## CRITICAL RULES
+
+1. **ONE TASK AT A TIME.** Only do the work described in the CURRENT task. Do NOT work ahead.
+2. **Do NOT call `say_to_user` with `finished_task: true` until the current task is truly done.** Using `finished_task: true` advances the task queue — if you use it prematurely, tasks get skipped.
+3. **Use `say_to_user` WITHOUT `finished_task`** for progress updates. Only set `finished_task: true` OR call `task_fully_completed` when ALL steps in the current task are done.
+4. **Sequential tool calls only.** Never call two tools in parallel when the second depends on the first.
+5. **Register pattern prevents hallucination.** Never pass raw addresses/amounts directly — always use registers set by the tools.
+
+## Step 1: Define the four tasks
+
+Call `define_tasks` with all 4 tasks in order:
+
+```json
+{"tool": "define_tasks", "tasks": [
+  "TASK 1 — Prepare: resolve Discord mention, look up token, check token balance, check ETH for gas. See discord_tipping skill 'Task 1'.",
+  "TASK 2 — Set up: convert amount to raw units. See discord_tipping skill 'Task 2'.",
+  "TASK 3 — Execute: call erc20_transfer preset, then broadcast_web3_tx. See discord_tipping skill 'Task 3'.",
+  "TASK 4 — Verify: call verify_tx_broadcast, report result. See discord_tipping skill 'Task 4'."
+]}
+```
+
+---
+
+## Task 1: Prepare — resolve mention, look up token, check balances
+
+### 1a. Resolve Discord mention
 
 Extract the Discord user ID from the mention and resolve it to a wallet address:
 
-```tool:discord_resolve_user
-user_mention: "1234567890"
+```json
+{"tool": "discord_resolve_user", "user_mention": "<numeric_user_id>"}
 ```
 
 **Note:** Pass the numeric user ID, not the raw mention format. Extract the numbers from mentions like `<@1234567890>`.
 
-- If `registered: true` -> proceed (the `recipient_address` register is automatically set)
-- If error/not registered -> tell user they need to register with `@starkbot register 0x...`
+- If `registered: true` → proceed (the `recipient_address` register is automatically set)
+- If error/not registered → tell user they need to register with `@starkbot register 0x...` and stop
 
-## Step 2: Look Up Token
+### 1b. Look up the token
 
-```tool:token_lookup
-symbol: "STARKBOT"
-network: base
-cache_as: token_address
+```json
+{"tool": "token_lookup", "symbol": "<TOKEN>", "network": "base", "cache_as": "token_address"}
 ```
 
-This caches:
-- `token_address` -> contract address
-- `token_address_decimals` -> decimals (e.g., 18)
+This sets registers: `token_address` and `token_address_decimals`.
 
-## Step 3: Convert Amount
+### 1c. Check token balance
 
-```tool:to_raw_amount
-amount: "1"
-cache_as: "transfer_amount"
+```json
+{"tool": "web3_preset_function_call", "preset": "erc20_balance", "network": "base", "call_only": true}
 ```
 
-Reads `token_address_decimals` automatically and outputs raw amount.
+Verify the sender has enough tokens for the tip. If insufficient, tell the user and stop.
 
-## Step 4: Transfer
+### 1d. Report findings and complete
 
-```tool:web3_preset_function_call
-preset: erc20_transfer
-network: base
+Tell the user what you found (recipient, token, balance) using `say_to_user` with `finished_task: true`:
+
+```json
+{"tool": "say_to_user", "message": "Resolved @user to 0x...\nToken: <TOKEN> (0x...)\nBalance: ...\nReady to tip.", "finished_task": true}
+```
+
+**Do NOT proceed to converting amounts in this task. Just report findings.**
+
+---
+
+## Task 2: Convert amount to raw units
+
+### 2a. Convert amount
+
+```json
+{"tool": "to_raw_amount", "amount": "<human_amount>", "cache_as": "transfer_amount"}
+```
+
+This reads `token_address_decimals` automatically and sets the `transfer_amount` register.
+
+After success:
+```json
+{"tool": "task_fully_completed", "summary": "Amount converted. Ready to execute transfer."}
+```
+
+---
+
+## Task 3: Execute the transfer
+
+**Exactly 2 tool calls, SEQUENTIALLY (one at a time, NOT in parallel):**
+
+### 3a. Create the transfer transaction (FIRST call)
+
+```json
+{"tool": "web3_preset_function_call", "preset": "erc20_transfer", "network": "base"}
 ```
 
 The `erc20_transfer` preset reads `token_address`, `recipient_address`, and `transfer_amount` from registers automatically.
 
-## Example: "tip @jimmy 1 STARKBOT"
+Wait for the result. Extract the `uuid` from the response.
 
-1. Extract user ID from `<@987654321>` -> `987654321`
+### 3b. Broadcast it (SECOND call — after 3a succeeds)
 
-2. Resolve:
-```tool:discord_resolve_user
-user_mention: "987654321"
-```
--> `{"public_address": "0x04abc...", "registered": true, "recipient_address_set": true}`
-
-3. Token lookup:
-```tool:token_lookup
-symbol: "STARKBOT"
-network: base
-cache_as: token_address
-```
--> Address: `0x1234...`, Decimals: 18
-
-4. Convert:
-```tool:to_raw_amount
-amount: "1"
-cache_as: "transfer_amount"
-```
--> `1000000000000000000`
-
-5. Transfer:
-```tool:web3_preset_function_call
-preset: erc20_transfer
-network: base
+```json
+{"tool": "broadcast_web3_tx", "uuid": "<uuid_from_3a>"}
 ```
 
-6. Confirm: "Sent 1 STARKBOT to @jimmy!"
+After broadcast succeeds:
+```json
+{"tool": "task_fully_completed", "summary": "Tip broadcast. Verifying next."}
+```
 
-## Common Tokens (Base Network)
+---
 
-| Token | Address | Decimals |
-|-------|---------|----------|
-| USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | 6 |
-| WETH | `0x4200000000000000000000000000000000000006` | 18 |
-| BNKR | `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b` | 18 |
+## Task 4: Verify the transfer
 
-For other tokens, use `token_lookup` to get the address.
+Call `verify_tx_broadcast` to poll for the receipt and confirm the result:
+
+```json
+{"tool": "verify_tx_broadcast"}
+```
+
+Read the output:
+
+- **"TRANSACTION VERIFIED"** → The tip succeeded AND the AI confirmed it matches the user's intent. Report success with tx hash and explorer link.
+- **"TRANSACTION CONFIRMED — INTENT MISMATCH"** → Confirmed on-chain but AI flagged a concern. Tell the user to check the explorer.
+- **"TRANSACTION REVERTED"** → The tip failed. Tell the user.
+- **"CONFIRMATION TIMEOUT"** → Tell the user to check the explorer link.
+
+Call `task_fully_completed` when verify_tx_broadcast returned VERIFIED or CONFIRMED.
