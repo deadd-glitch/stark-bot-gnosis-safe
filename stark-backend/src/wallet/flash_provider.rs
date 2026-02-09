@@ -10,6 +10,7 @@
 
 use async_trait::async_trait;
 use ethers::types::{H256, Signature, U256, transaction::eip2718::TypedTransaction};
+use ethers::utils::rlp;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -192,6 +193,64 @@ impl FlashWalletProvider {
         Ok(Signature { r, s, v })
     }
 
+    /// Extract (v, r, s) from a Privy-returned RLP-encoded signed transaction.
+    ///
+    /// For EIP-1559 (type 2), the format is:
+    ///   0x02 ++ rlp([chain_id, nonce, max_priority_fee, max_fee, gas, to, value, data, access_list, y_parity, r, s])
+    /// The last 3 items in the RLP list are the signature: y_parity, r, s.
+    fn extract_signature_from_signed_tx(signed_tx_hex: &str) -> Result<Signature, String> {
+        let hex_str = signed_tx_hex.strip_prefix("0x").unwrap_or(signed_tx_hex);
+        let tx_bytes = hex::decode(hex_str)
+            .map_err(|e| format!("Invalid signed tx hex: {}", e))?;
+
+        if tx_bytes.is_empty() {
+            return Err("Empty signed transaction".to_string());
+        }
+
+        // EIP-2718 typed transactions start with a type byte (0x01 or 0x02)
+        // followed by the RLP payload
+        let tx_type = tx_bytes[0];
+        if tx_type != 0x02 && tx_type != 0x01 {
+            return Err(format!(
+                "Unsupported transaction type: 0x{:02x} (expected 0x01 or 0x02)",
+                tx_type
+            ));
+        }
+
+        // Decode the RLP list after the type byte
+        let rlp_data = rlp::Rlp::new(&tx_bytes[1..]);
+        let item_count = rlp_data.item_count()
+            .map_err(|e| format!("Failed to decode RLP: {}", e))?;
+
+        // EIP-1559 (type 2): 12 items [chain_id, nonce, max_priority, max_fee, gas, to, value, data, access_list, y_parity, r, s]
+        // EIP-2930 (type 1): 11 items [chain_id, nonce, gas_price, gas, to, value, data, access_list, y_parity, r, s]
+        if item_count < 11 {
+            return Err(format!(
+                "Unexpected RLP item count: {} (expected >= 11)",
+                item_count
+            ));
+        }
+
+        // Signature is always the last 3 items: y_parity, r, s
+        let y_parity: u64 = rlp_data.val_at(item_count - 3)
+            .map_err(|e| format!("Failed to decode y_parity: {}", e))?;
+        let r: U256 = rlp_data.val_at(item_count - 2)
+            .map_err(|e| format!("Failed to decode r: {}", e))?;
+        let s: U256 = rlp_data.val_at(item_count - 1)
+            .map_err(|e| format!("Failed to decode s: {}", e))?;
+
+        // For EIP-1559/2930 typed transactions, v = y_parity (0 or 1)
+        // ethers expects v as 0 or 1 for typed transactions (NOT 27/28)
+        let v = y_parity;
+
+        log::debug!(
+            "Extracted signature from signed tx (type 0x{:02x}): v={}, r={:#x}, s={:#x}",
+            tx_type, v, r, s
+        );
+
+        Ok(Signature { r, s, v })
+    }
+
     /// Refresh the instance token by calling the control plane's refresh endpoint.
     /// The control plane accepts expired tokens (up to 30 days old) and returns a fresh one.
     async fn refresh_instance_token(&self) -> Result<(), String> {
@@ -342,11 +401,9 @@ impl WalletProvider for FlashWalletProvider {
             .await
             .map_err(|e| format!("Failed to parse sign response: {}", e))?;
 
-        // The signed_transaction contains the full RLP-encoded signed tx
-        // We need to extract just the signature from it
-        // For now, we'll parse it as a raw signature
-        // TODO: This may need adjustment based on Privy's actual response format
-        Self::parse_signature(&data.signed_transaction)
+        // Privy returns the full RLP-encoded signed transaction.
+        // Extract (v, r, s) signature components from it.
+        Self::extract_signature_from_signed_tx(&data.signed_transaction)
     }
 
     async fn sign_hash(&self, hash: H256) -> Result<Signature, String> {
