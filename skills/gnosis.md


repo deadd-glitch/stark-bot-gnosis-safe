@@ -1,0 +1,59 @@
+---
+name: gnosis
+description: "Interact with Gnosis Safe / Safe{Wallet} multisig on EVM chains (Base default). Create multisig wallet, get safe info, propose/sign/execute transactions with simulation and confirmation."
+version: 1.4
+author: Dead
+---
+
+# Gnosis Safe Skill (Safe{Wallet} Multisig)
+
+Allows StarkBot to create and manage Gnosis Safe multisig wallets on EVM chains (defaults to Base chainId 8453).  
+Works together with existing transfer/swap/balance tools for secure DeFi operations.
+
+### Must-Work Natural Language Triggers (Consistency Required)
+Bot must detect these phrases (and similar ones), extract parameters if possible, ask smart questions for missing info, always simulate transactions, and confirm actions involving value:
+
+- "Create a safe"  
+  → Trigger create_safe → Ask: "List owner addresses (space or comma separated), threshold (example: 2), chain? (Base default)"
+
+- "Create a safe with owners 0xabc 0xdef threshold 2"  
+  → Parse → confirm → run create_safe
+
+- "Sign a tx on a safe"  
+  → Trigger safe_tx → Ask: "Safe address? To? Value in ETH? Data (hex optional)? Will simulate first."
+
+- "Sign transaction on my safe at 0x1234abcd..."  
+  → Use given address → continue flow
+
+- "Create and sign a tx on a safe"  
+  → Full safe_tx (propose + sign + execute if threshold reached) → Ask for tx details if missing
+
+- "Send 0.5 ETH from safe 0xabc to 0xdef"  
+  → Map to safe_tx flow
+
+- "Get info on a safe" / "Status of my safe 0x..."  
+  → Run get_safe_info → show owners, threshold, nonce, balance, pending txs
+
+Bot rules:
+- Chain: Base (8453) default; allow override.
+- Always simulate tx (check revert + gas) before proposing/executing.
+- Confirm: "This will send X ETH – type YES to proceed."
+- Use SIWE / Privy signer if user is owner.
+- Clear errors: "Not owner", "Threshold needs X more signatures", "Revert reason: ..."
+
+---
+
+## 1. Create Safe
+
+**Action:** `create_safe`
+
+**Inputs:**
+- `owners`: array of Ethereum addresses
+- `threshold`: integer (1 to owners.length)
+- Optional: `chain_id` (number, default 8453)
+
+**Behavior:** Deploy using latest Safe factory (from safe.global), return address + tx hash + link.
+
+**Example JSON Input:**
+```json
+{"action": "create_safe", "owners": ["0xabc123...","0xdef456..."], "threshold": 2}
